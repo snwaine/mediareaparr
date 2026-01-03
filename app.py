@@ -52,10 +52,14 @@ def main():
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=DAYS_OLD)
 
-    print(f"[autodeletarr] Starting run")
-    print(f"[autodeletarr] RADARR_URL={RADARR_URL}")
-    print(f"[autodeletarr] TAG_LABEL={TAG_LABEL} DAYS_OLD={DAYS_OLD} cutoff={cutoff.isoformat()}")
-    print(f"[autodeletarr] DELETE_FILES={DELETE_FILES} ADD_IMPORT_EXCLUSION={ADD_IMPORT_EXCLUSION} DRY_RUN={DRY_RUN}")
+    print(f"[agregarr-cleanarr
+] Starting run")
+    print(f"[agregarr-cleanarr
+] RADARR_URL={RADARR_URL}")
+    print(f"[agregarr-cleanarr
+] TAG_LABEL={TAG_LABEL} DAYS_OLD={DAYS_OLD} cutoff={cutoff.isoformat()}")
+    print(f"[agregarr-cleanarr
+] DELETE_FILES={DELETE_FILES} ADD_IMPORT_EXCLUSION={ADD_IMPORT_EXCLUSION} DRY_RUN={DRY_RUN}")
 
     # Find tag id
     tags = radarr_get("/api/v3/tag")
@@ -64,7 +68,8 @@ def main():
         die(f"Tag '{TAG_LABEL}' not found in Radarr. Create it first and tag some movies.", 2)
 
     tag_id = tag["id"]
-    print(f"[autodeletarr] tag_id={tag_id}")
+    print(f"[agregarr-cleanarr
+] tag_id={tag_id}")
 
     movies = radarr_get("/api/v3/movie")
 
@@ -79,19 +84,24 @@ def main():
         if added < cutoff:
             to_delete.append((m["id"], m.get("title"), added_str))
 
-    print(f"[autodeletarr] Found {len(to_delete)} movie(s) to delete")
+    print(f"[agregarr-cleanarr
+] Found {len(to_delete)} movie(s) to delete")
 
     for movie_id, title, added_str in to_delete:
-        print(f"[autodeletarr] DELETE candidate: id={movie_id} title='{title}' added={added_str}")
+        print(f"[agregarr-cleanarr
+] DELETE candidate: id={movie_id} title='{title}' added={added_str}")
         if DRY_RUN:
             continue
         try:
             radarr_delete_movie(movie_id)
-            print(f"[autodeletarr] Deleted: id={movie_id} title='{title}'")
+            print(f"[agregarr-cleanarr
+] Deleted: id={movie_id} title='{title}'")
         except Exception as e:
-            print(f"[autodeletarr] ERROR deleting id={movie_id} title='{title}': {e}", file=sys.stderr)
+            print(f"[agregarr-cleanarr
+] ERROR deleting id={movie_id} title='{title}': {e}", file=sys.stderr)
 
-    print(f"[autodeletarr] Run complete")
+    print(f"[agregarr-cleanarr
+] Run complete")
 
 if __name__ == "__main__":
     main()
