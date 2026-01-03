@@ -1,19 +1,35 @@
 import os
 import sys
 import time
-import requests
+import requestsimport json
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-RADARR_URL = os.environ.get("RADARR_URL", "").rstrip("/")
-RADARR_API_KEY = os.environ.get("RADARR_API_KEY", "")
-TAG_LABEL = os.environ.get("TAG_LABEL", "TAG_LABLE2")
-DAYS_OLD = int(os.environ.get("DAYS_OLD", "30"))
+CONFIG_PATH = Path(os.environ.get("CONFIG_DIR", "/config")) / "config.json"
 
-DELETE_FILES = os.environ.get("DELETE_FILES", "true").lower() == "true"
-ADD_IMPORT_EXCLUSION = os.environ.get("ADD_IMPORT_EXCLUSION", "false").lower() == "true"
-DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
+def load_cfg():
+    cfg = {}
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    return cfg
 
-TIMEOUT = int(os.environ.get("HTTP_TIMEOUT_SECONDS", "30"))
+_cfg = load_cfg()
+
+def cfg_get(name: str, default: str):
+    return str(_cfg.get(name, os.environ.get(name, default)))
+
+RADARR_URL = cfg_get("RADARR_URL", "").rstrip("/")
+RADARR_API_KEY = cfg_get("RADARR_API_KEY", "")
+TAG_LABEL = cfg_get("TAG_LABEL", "autodelete30")
+DAYS_OLD = int(cfg_get("DAYS_OLD", "30"))
+
+DELETE_FILES = cfg_get("DELETE_FILES", "true").lower() == "true"
+ADD_IMPORT_EXCLUSION = cfg_get("ADD_IMPORT_EXCLUSION", "false").lower() == "true"
+DRY_RUN = cfg_get("DRY_RUN", "false").lower() == "true"
+TIMEOUT = int(cfg_get("HTTP_TIMEOUT_SECONDS", "30"))
 
 def die(msg: str, code: int = 1):
     print(msg, file=sys.stderr)
