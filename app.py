@@ -1,24 +1,33 @@
 import os
 import sys
-import time
-import requestsimport json
+import json
+import requests
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-CONFIG_PATH = Path(os.environ.get("CONFIG_DIR", "/config")) / "config.json"
+# --------------------
+# Persistent config/state paths
+# --------------------
+CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
+CONFIG_PATH = CONFIG_DIR / "config.json"
+STATE_PATH = CONFIG_DIR / "state.json"
 
-def load_cfg():
-    cfg = {}
-    if CONFIG_PATH.exists():
-        try:
-            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            cfg = {}
-    return cfg
+STATE_HISTORY_LIMIT = int(os.environ.get("STATE_HISTORY_LIMIT", "20"))
+
+# --------------------
+# Load config.json (if exists) and fall back to env vars
+# --------------------
+def load_cfg() -> dict:
+    try:
+        if CONFIG_PATH.exists():
+            return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
 
 _cfg = load_cfg()
 
-def cfg_get(name: str, default: str):
+def cfg_get(name: str, default: str) -> str:
     return str(_cfg.get(name, os.environ.get(name, default)))
 
 RADARR_URL = cfg_get("RADARR_URL", "").rstrip("/")
@@ -28,13 +37,38 @@ DAYS_OLD = int(cfg_get("DAYS_OLD", "30"))
 
 DELETE_FILES = cfg_get("DELETE_FILES", "true").lower() == "true"
 ADD_IMPORT_EXCLUSION = cfg_get("ADD_IMPORT_EXCLUSION", "false").lower() == "true"
-DRY_RUN = cfg_get("DRY_RUN", "false").lower() == "true"
+DRY_RUN = cfg_get("DRY_RUN", "true").lower() == "true"
 TIMEOUT = int(cfg_get("HTTP_TIMEOUT_SECONDS", "30"))
 
+# --------------------
+# Utility
+# --------------------
 def die(msg: str, code: int = 1):
     print(msg, file=sys.stderr)
     sys.exit(code)
 
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def load_state() -> dict:
+    try:
+        if STATE_PATH.exists():
+            return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def save_state(state: dict) -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception:
+        # Don't fail the run because state couldn't be written
+        pass
+
+# --------------------
+# Radarr API helpers
+# --------------------
 def radarr_get(path: str):
     url = f"{RADARR_URL}{path}"
     r = requests.get(url, headers={"X-Api-Key": RADARR_API_KEY}, timeout=TIMEOUT)
@@ -51,8 +85,7 @@ def radarr_delete_movie(movie_id: int):
     r.raise_for_status()
 
 def parse_radarr_date(s: str) -> datetime:
-    # Radarr typically returns ISO8601 like "2024-12-01T10:20:30Z" or with offset
-    # datetime.fromisoformat doesn't accept trailing 'Z' pre-3.11 in some cases, so normalize.
+    # Normalize trailing Z
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     dt = datetime.fromisoformat(s)
@@ -60,103 +93,133 @@ def parse_radarr_date(s: str) -> datetime:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
-def get_tag_id_by_label(tag_label: str) -> int | None:
-    tags = radarr_get("/api/v3/tag")
-    tag = next((t for t in tags if t.get("label") == tag_label), None)
-    return tag["id"] if tag else None
-
-def find_delete_candidates(tag_label: str, days_old: int):
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
-
-    tag_id = get_tag_id_by_label(tag_label)
-    if not tag_id:
-        return {"error": f"Tag '{tag_label}' not found", "candidates": []}
-
-    movies = radarr_get("/api/v3/movie")
-    candidates = []
-
-    for m in movies:
-        if tag_id not in (m.get("tags") or []):
-            continue
-
-        added_str = m.get("added")
-        if not added_str:
-            continue
-
-        added = parse_radarr_date(added_str)
-        if added < cutoff:
-            age_days = int((datetime.now(timezone.utc) - added).total_seconds() // 86400)
-            candidates.append({
-                "id": m.get("id"),
-                "title": m.get("title"),
-                "year": m.get("year"),
-                "added": added_str,
-                "age_days": age_days,
-                "path": m.get("path"),
-            })
-
-    # Sort oldest first
-    candidates.sort(key=lambda x: x["age_days"], reverse=True)
-    return {"error": None, "candidates": candidates, "tag_id": tag_id, "cutoff": cutoff.isoformat()}
-
+# --------------------
+# Main
+# --------------------
 def main():
     if not RADARR_URL:
         die("RADARR_URL is required, e.g. http://radarr:7878")
     if not RADARR_API_KEY:
         die("RADARR_API_KEY is required")
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=DAYS_OLD)
+    run_started = datetime.now(timezone.utc)
+    state = load_state()
 
-    print(f"[agregarr-cleanarr
-] Starting run")
-    print(f"[agregarr-cleanarr
-] RADARR_URL={RADARR_URL}")
-    print(f"[agregarr-cleanarr
-] TAG_LABEL={TAG_LABEL} DAYS_OLD={DAYS_OLD} cutoff={cutoff.isoformat()}")
-    print(f"[agregarr-cleanarr
-] DELETE_FILES={DELETE_FILES} ADD_IMPORT_EXCLUSION={ADD_IMPORT_EXCLUSION} DRY_RUN={DRY_RUN}")
+    # Initialize run state early
+    run_state = {
+        "started_at": run_started.isoformat(),
+        "finished_at": None,
+        "duration_seconds": None,
+        "status": "running",
+        "dry_run": DRY_RUN,
+        "tag_label": TAG_LABEL,
+        "days_old": DAYS_OLD,
+        "delete_files": DELETE_FILES,
+        "add_import_exclusion": ADD_IMPORT_EXCLUSION,
+        "candidates_found": 0,
+        "deleted_count": 0,
+        "deleted": [],   # list of objects (dry-run included)
+        "errors": [],
+    }
 
-    # Find tag id
-    tags = radarr_get("/api/v3/tag")
-    tag = next((t for t in tags if t.get("label") == TAG_LABEL), None)
-    if not tag:
-        die(f"Tag '{TAG_LABEL}' not found in Radarr. Create it first and tag some movies.", 2)
+    state["last_run"] = run_state
+    save_state(state)
 
-    tag_id = tag["id"]
-    print(f"[agregarr-cleanarr
-] tag_id={tag_id}")
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=DAYS_OLD)
 
-    movies = radarr_get("/api/v3/movie")
+        print(f"[agregarr-cleanarr] Starting run")
+        print(f"[agregarr-cleanarr] RADARR_URL={RADARR_URL}")
+        print(f"[agregarr-cleanarr] TAG_LABEL={TAG_LABEL} DAYS_OLD={DAYS_OLD} cutoff={cutoff.isoformat()}")
+        print(f"[agregarr-cleanarr] DELETE_FILES={DELETE_FILES} ADD_IMPORT_EXCLUSION={ADD_IMPORT_EXCLUSION} DRY_RUN={DRY_RUN}")
 
-    to_delete = []
-    for m in movies:
-        if tag_id not in (m.get("tags") or []):
-            continue
-        added_str = m.get("added")
-        if not added_str:
-            continue
-        added = parse_radarr_date(added_str)
-        if added < cutoff:
-            to_delete.append((m["id"], m.get("title"), added_str))
+        # Find tag id
+        tags = radarr_get("/api/v3/tag")
+        tag = next((t for t in tags if t.get("label") == TAG_LABEL), None)
+        if not tag:
+            raise RuntimeError(f"Tag '{TAG_LABEL}' not found in Radarr. Create it and tag movies first.")
 
-    print(f"[agregarr-cleanarr
-] Found {len(to_delete)} movie(s) to delete")
+        tag_id = tag["id"]
 
-    for movie_id, title, added_str in to_delete:
-        print(f"[agregarr-cleanarr
-] DELETE candidate: id={movie_id} title='{title}' added={added_str}")
-        if DRY_RUN:
-            continue
-        try:
-            radarr_delete_movie(movie_id)
-            print(f"[agregarr-cleanarr
-] Deleted: id={movie_id} title='{title}'")
-        except Exception as e:
-            print(f"[agregarr-cleanarr
-] ERROR deleting id={movie_id} title='{title}': {e}", file=sys.stderr)
+        # Get movies
+        movies = radarr_get("/api/v3/movie")
 
-    print(f"[agregarr-cleanarr
-] Run complete")
+        to_delete = []
+        for m in movies:
+            if tag_id not in (m.get("tags") or []):
+                continue
+            added_str = m.get("added")
+            if not added_str:
+                continue
+            added = parse_radarr_date(added_str)
+            if added < cutoff:
+                age_days = int((datetime.now(timezone.utc) - added).total_seconds() // 86400)
+                to_delete.append((m, age_days))
+
+        # Oldest first
+        to_delete.sort(key=lambda x: x[1], reverse=True)
+
+        run_state["candidates_found"] = len(to_delete)
+        save_state(state)
+
+        for m, age_days in to_delete:
+            movie_id = m["id"]
+            title = m.get("title")
+            year = m.get("year")
+            added_str = m.get("added")
+            path = m.get("path")
+
+            print(f"[agregarr-cleanarr] DELETE candidate: id={movie_id} title='{title}' added={added_str}")
+
+            deleted_entry = {
+                "id": movie_id,
+                "title": title,
+                "year": year,
+                "added": added_str,
+                "age_days": age_days,
+                "path": path,
+                "deleted_at": None,
+                "dry_run": DRY_RUN,
+            }
+
+            if DRY_RUN:
+                # For dry-run, we record what *would* be deleted
+                run_state["deleted"].append(deleted_entry)
+                continue
+
+            try:
+                radarr_delete_movie(movie_id)
+                deleted_entry["deleted_at"] = utc_now_iso()
+                run_state["deleted"].append(deleted_entry)
+                run_state["deleted_count"] = len([d for d in run_state["deleted"] if d.get("deleted_at")])
+                save_state(state)
+                print(f"[agregarr-cleanarr] Deleted: id={movie_id} title='{title}'")
+            except Exception as e:
+                err = f"ERROR deleting id={movie_id} title='{title}': {e}"
+                print(f"[agregarr-cleanarr] {err}", file=sys.stderr)
+                run_state["errors"].append(err)
+                save_state(state)
+
+        run_state["status"] = "ok" if not run_state["errors"] else "ok_with_errors"
+
+    except Exception as e:
+        run_state["status"] = "failed"
+        run_state["errors"].append(str(e))
+        raise
+    finally:
+        finished = datetime.now(timezone.utc)
+        run_state["finished_at"] = finished.isoformat()
+        run_state["duration_seconds"] = int((finished - run_started).total_seconds())
+
+        # Save last_run + history
+        state["last_run"] = run_state
+        history = state.get("run_history") or []
+        history.insert(0, run_state)  # newest first
+        history = history[:STATE_HISTORY_LIMIT]
+        state["run_history"] = history
+        save_state(state)
+
+        print(f"[agregarr-cleanarr] Run complete status={run_state['status']}")
 
 if __name__ == "__main__":
     main()
