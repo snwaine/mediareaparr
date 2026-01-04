@@ -7,12 +7,20 @@ from datetime import datetime, timezone
 import requests
 from flask import (
     Flask, request, redirect, render_template_string,
-    flash, get_flashed_messages
+    flash, get_flashed_messages, send_file
 )
 
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 CONFIG_PATH = CONFIG_DIR / "config.json"
 STATE_PATH = CONFIG_DIR / "state.json"
+
+# Logo files (put one of these in /config)
+LOGO_CANDIDATES = [
+    CONFIG_DIR / "logo.png",
+    CONFIG_DIR / "logo.jpg",
+    CONFIG_DIR / "logo.jpeg",
+    CONFIG_DIR / "logo.svg",
+]
 
 app = Flask(__name__)
 app.secret_key = "agregarr-cleanarr-secret"
@@ -26,7 +34,6 @@ def env_default(name: str, default: str = "") -> str:
 
 
 def load_config():
-    # Defaults from env
     cfg = {
         "RADARR_URL": env_default("RADARR_URL", "http://radarr:7878").rstrip("/"),
         "RADARR_API_KEY": env_default("RADARR_API_KEY", ""),
@@ -48,10 +55,8 @@ def load_config():
         except Exception:
             pass
 
-    # Normalize theme
     t = (cfg.get("UI_THEME") or "dark").lower()
     cfg["UI_THEME"] = t if t in ("dark", "light") else "dark"
-
     return cfg
 
 
@@ -71,6 +76,27 @@ def load_state():
 
 def checkbox(name: str) -> bool:
     return request.form.get(name) == "on"
+
+
+# --------------------------
+# Logo helpers
+# --------------------------
+def find_logo_path() -> Path | None:
+    for p in LOGO_CANDIDATES:
+        if p.exists() and p.is_file():
+            return p
+    return None
+
+
+def logo_mime(p: Path) -> str:
+    ext = p.suffix.lower()
+    if ext == ".png":
+        return "image/png"
+    if ext in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if ext == ".svg":
+        return "image/svg+xml"
+    return "application/octet-stream"
 
 
 # --------------------------
@@ -185,14 +211,13 @@ BASE_HEAD = """
     --text:#e6edf3;
     --line:#1f2a36;
     --line2:#283241;
-    --accent:#7c3aed;    /* purple */
-    --accent2:#22c55e;   /* green */
-    --warn:#f59e0b;      /* amber */
-    --bad:#ef4444;       /* red */
+    --accent:#7c3aed;
+    --accent2:#22c55e;
+    --warn:#f59e0b;
+    --bad:#ef4444;
     --shadow: 0 12px 30px rgba(0,0,0,.35);
   }
 
-  /* Light theme overrides */
   [data-theme="light"]{
     --bg:#f7f8fb;
     --panel:#ffffff;
@@ -201,10 +226,10 @@ BASE_HEAD = """
     --text:#0b1220;
     --line:#e5e7eb;
     --line2:#d1d5db;
-    --accent:#6d28d9;    /* purple */
-    --accent2:#16a34a;   /* green */
-    --warn:#d97706;      /* amber */
-    --bad:#dc2626;       /* red */
+    --accent:#6d28d9;
+    --accent2:#16a34a;
+    --warn:#d97706;
+    --bad:#dc2626;
     --shadow: 0 12px 30px rgba(0,0,0,.08);
   }
 
@@ -237,17 +262,30 @@ BASE_HEAD = """
     backdrop-filter: blur(10px);
   }
   .brand{ display:flex; align-items:center; gap:12px; }
-  .logo{
+  .logoWrap{
+    width: 38px; height: 38px; border-radius: 12px;
+    border: 1px solid var(--line2);
+    background: rgba(255,255,255,.03);
+    overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .logoBadge{
     width: 38px; height: 38px; border-radius: 12px;
     background: linear-gradient(135deg, rgba(124,58,237,.9), rgba(34,197,94,.6));
     box-shadow: 0 10px 24px rgba(124,58,237,.18);
   }
+  .logoImg{
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display:block;
+    background: rgba(0,0,0,.08);
+  }
+
   .title h1{ margin:0; font-size: 16px; letter-spacing:.2px; }
   .title .sub{ color: var(--muted); font-size: 12px; margin-top: 2px; }
 
-  .nav{
-    display:flex; align-items:center; gap:8px; flex-wrap: wrap; justify-content: flex-end;
-  }
+  .nav{ display:flex; align-items:center; gap:8px; flex-wrap: wrap; justify-content: flex-end; }
   .pill{
     border: 1px solid var(--line2);
     background: rgba(255,255,255,.03);
@@ -262,12 +300,7 @@ BASE_HEAD = """
     box-shadow: 0 0 0 3px rgba(124,58,237,.18);
   }
 
-  .grid{
-    display:grid;
-    grid-template-columns: repeat(12, 1fr);
-    gap: 14px;
-    margin-top: 16px;
-  }
+  .grid{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-top: 16px; }
 
   .card{
     grid-column: span 12;
@@ -288,11 +321,7 @@ BASE_HEAD = """
   .card .hd h2{ margin:0; font-size: 14px; letter-spacing:.2px; }
   .card .bd{ padding: 14px 16px; }
 
-  .kpi{
-    display:grid;
-    grid-template-columns: repeat(12, 1fr);
-    gap: 12px;
-  }
+  .kpi{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
   .k{
     grid-column: span 12;
     border: 1px solid var(--line);
@@ -350,24 +379,12 @@ BASE_HEAD = """
     background: linear-gradient(135deg, rgba(239,68,68,.20), rgba(239,68,68,.08));
   }
 
-  .alert{
-    border-radius: 14px;
-    padding: 12px 14px;
-    border: 1px solid var(--line2);
-    background: rgba(255,255,255,.03);
-    margin: 14px 0 0;
-  }
+  .alert{ border-radius: 14px; padding: 12px 14px; border: 1px solid var(--line2); background: rgba(255,255,255,.03); margin: 14px 0 0; }
   .alert.success{ border-color: rgba(34,197,94,.55); }
   .alert.error{ border-color: rgba(239,68,68,.55); }
 
-  .form{
-    display:grid;
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-  @media(min-width: 900px){
-    .form{ grid-template-columns: 1fr 1fr; }
-  }
+  .form{ display:grid; grid-template-columns: 1fr; gap: 12px; }
+  @media(min-width: 900px){ .form{ grid-template-columns: 1fr 1fr; } }
   .field{
     border: 1px solid var(--line);
     border-radius: 14px;
@@ -385,20 +402,13 @@ BASE_HEAD = """
     border-radius: 12px;
     outline: none;
   }
-  [data-theme="light"] .field input, [data-theme="light"] .field select{
-    background: rgba(0,0,0,.02);
-  }
+  [data-theme="light"] .field input, [data-theme="light"] .field select{ background: rgba(0,0,0,.02); }
   .field input:focus, .field select:focus{
     border-color: rgba(124,58,237,.65);
     box-shadow: 0 0 0 3px rgba(124,58,237,.15);
   }
 
-  .checks{
-    display:flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-top: 4px;
-  }
+  .checks{ display:flex; flex-direction: column; gap: 10px; margin-top: 4px; }
   .check{
     display:flex; align-items:center; gap:10px;
     border: 1px solid var(--line);
@@ -409,19 +419,8 @@ BASE_HEAD = """
   [data-theme="light"] .check{ background: rgba(0,0,0,.03); }
   .check input{ transform: scale(1.2); }
 
-  table{
-    width:100%;
-    border-collapse: collapse;
-    overflow:hidden;
-    border-radius: 14px;
-    border: 1px solid var(--line);
-  }
-  th, td{
-    padding: 10px 10px;
-    border-bottom: 1px solid var(--line);
-    font-size: 13px;
-    vertical-align: top;
-  }
+  table{ width:100%; border-collapse: collapse; overflow:hidden; border-radius: 14px; border: 1px solid var(--line); }
+  th, td{ padding: 10px 10px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }
   th{
     text-align:left;
     color:#cbd5e1;
@@ -433,15 +432,8 @@ BASE_HEAD = """
   tr:hover td{ background: rgba(255,255,255,.02); }
   .tablewrap{ max-height: 420px; overflow:auto; border-radius: 14px; border: 1px solid var(--line); }
 
-  .statusDot{
-    display:inline-flex; align-items:center; gap:8px;
-    font-weight: 700;
-  }
-  .dot{
-    width:10px; height:10px; border-radius: 999px;
-    background: var(--muted);
-    box-shadow: 0 0 0 4px rgba(255,255,255,.05);
-  }
+  .statusDot{ display:inline-flex; align-items:center; gap:8px; font-weight: 700; }
+  .dot{ width:10px; height:10px; border-radius: 999px; background: var(--muted); box-shadow: 0 0 0 4px rgba(255,255,255,.05); }
   .dot.ok{ background: var(--accent2); box-shadow: 0 0 0 4px rgba(34,197,94,.12); }
   .dot.warn{ background: var(--warn); box-shadow: 0 0 0 4px rgba(245,158,11,.12); }
   .dot.bad{ background: var(--bad); box-shadow: 0 0 0 4px rgba(239,68,68,.12); }
@@ -519,7 +511,6 @@ BASE_HEAD = """
 
 
 def shell(page_title: str, active: str, body: str):
-    # active: 'dash' | 'settings' | 'preview' | 'status'
     cfg = load_config()
     theme = (cfg.get("UI_THEME") or "dark").lower()
     if theme not in ("dark", "light"):
@@ -542,6 +533,14 @@ def shell(page_title: str, active: str, body: str):
         + pill("Preview", "/preview", "preview")
         + pill("Status", "/status", "status")
         + theme_btn
+    )
+
+    # If logo exists, show it; otherwise show gradient badge.
+    has_logo = find_logo_path() is not None
+    logo_html = (
+        '<div class="logoWrap"><img class="logoImg" src="/logo" alt="logo"></div>'
+        if has_logo
+        else '<div class="logoBadge"></div>'
     )
 
     modal = """
@@ -576,7 +575,7 @@ def shell(page_title: str, active: str, body: str):
   <div class="wrap">
     <div class="topbar">
       <div class="brand">
-        <div class="logo"></div>
+        {logo_html}
         <div class="title">
           <h1>agregarr-cleanarr</h1>
           <div class="sub">Radarr tag + age cleanup • WebUI • cron apply • dashboard</div>
@@ -610,6 +609,14 @@ def home():
     return redirect("/dashboard")
 
 
+@app.get("/logo")
+def logo():
+    p = find_logo_path()
+    if not p:
+        return ("", 404)
+    return send_file(p, mimetype=logo_mime(p), conditional=True)
+
+
 @app.post("/toggle-theme")
 def toggle_theme():
     cfg = load_config()
@@ -631,16 +638,6 @@ def settings():
         else '<button class="btn bad" type="button" onclick="openRunNowModal()">Run Now</button>'
     )
 
-    theme_select = f"""
-      <div class="field">
-        <label>UI Theme</label>
-        <select name="UI_THEME">
-          <option value="dark" {"selected" if cfg.get("UI_THEME","dark")=="dark" else ""}>Dark</option>
-          <option value="light" {"selected" if cfg.get("UI_THEME","dark")=="light" else ""}>Light</option>
-        </select>
-      </div>
-    """
-
     body = f"""
       <div class="grid">
         <div class="card">
@@ -653,6 +650,7 @@ def settings():
           </div>
           <div class="bd">
             <div class="muted">Saved to <code>/config/config.json</code>. Cron changes need <b>Apply Cron</b>.</div>
+            <div class="muted" style="margin-top:6px;">Logo: put <code>logo.png</code> (or jpg/svg) in <code>/config</code> to replace the badge.</div>
             {alerts}
 
             <form method="post" action="/save" style="margin-top:14px;">
@@ -684,7 +682,13 @@ def settings():
                   <input type="number" min="5" name="HTTP_TIMEOUT_SECONDS" value="{cfg["HTTP_TIMEOUT_SECONDS"]}">
                 </div>
 
-                {theme_select}
+                <div class="field">
+                  <label>UI Theme</label>
+                  <select name="UI_THEME">
+                    <option value="dark" {"selected" if cfg.get("UI_THEME","dark")=="dark" else ""}>Dark</option>
+                    <option value="light" {"selected" if cfg.get("UI_THEME","dark")=="light" else ""}>Light</option>
+                  </select>
+                </div>
               </div>
 
               <div class="checks" style="margin-top:12px;">
@@ -730,7 +734,6 @@ def settings():
         </div>
       </div>
     """
-
     return render_template_string(shell("agregarr-cleanarr • Settings", "settings", body))
 
 
@@ -745,7 +748,6 @@ def save():
     cfg["CRON_SCHEDULE"] = request.form.get("CRON_SCHEDULE") or "15 3 * * *"
     cfg["HTTP_TIMEOUT_SECONDS"] = int(request.form.get("HTTP_TIMEOUT_SECONDS") or "30")
     cfg["UI_THEME"] = (request.form.get("UI_THEME") or cfg.get("UI_THEME", "dark")).lower()
-
     if cfg["UI_THEME"] not in ("dark", "light"):
         cfg["UI_THEME"] = "dark"
 
@@ -779,7 +781,6 @@ def apply_cron():
         with open("/etc/crontabs/root", "w", encoding="utf-8") as f:
             f.write(cron_line)
 
-        # BusyBox crond is PID 1 (entrypoint execs it)
         os.kill(1, signal.SIGHUP)
         flash("Cron schedule applied successfully ✔", "success")
     except Exception as e:
@@ -859,7 +860,6 @@ def preview():
             </div>
           </div>
         """
-
         return render_template_string(shell("agregarr-cleanarr • Preview", "preview", body))
 
     except Exception as e:
@@ -937,9 +937,7 @@ def dashboard():
       <div class="kpi">
         <div class="k">
           <div class="l">Status</div>
-          <div class="v">
-            <span class="statusDot"><span class="dot {dot}"></span>{status_text}</span>
-          </div>
+          <div class="v"><span class="statusDot"><span class="dot {dot}"></span>{status_text}</span></div>
         </div>
         <div class="k">
           <div class="l">Candidates</div>
@@ -1114,7 +1112,6 @@ def dashboard():
         {history_table}
       </div>
     """
-
     return render_template_string(shell("agregarr-cleanarr • Dashboard", "dash", body))
 
 
