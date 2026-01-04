@@ -36,6 +36,9 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
             type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
         # Generates tags/labels from git refs/events :contentReference[oaicite:4]{index=4}
 
       - name: Build and push
