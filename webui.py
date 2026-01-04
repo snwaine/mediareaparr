@@ -16,11 +16,19 @@ STATE_PATH = CONFIG_DIR / "state.json"
 
 # Logo files (put one of these in /config)
 LOGO_CANDIDATES = [
+    # root of /config
     CONFIG_DIR / "logo.png",
     CONFIG_DIR / "logo.jpg",
     CONFIG_DIR / "logo.jpeg",
     CONFIG_DIR / "logo.svg",
+
+    # /config/logo/ subfolder
+    CONFIG_DIR / "logo" / "logo.png",
+    CONFIG_DIR / "logo" / "logo.jpg",
+    CONFIG_DIR / "logo" / "logo.jpeg",
+    CONFIG_DIR / "logo" / "logo.svg",
 ]
+
 
 app = Flask(__name__)
 app.secret_key = "agregarr-cleanarr-secret"
