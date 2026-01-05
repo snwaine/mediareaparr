@@ -205,7 +205,7 @@ def time_ago(dt_str: str) -> str:
 
 
 # --------------------------
-# Stylish UI + Light/Dark Theme + Modal
+# Stylish UI + Light/Dark Theme + Modal + No Jump Scroll Restore
 # --------------------------
 BASE_HEAD = """
 <meta charset="utf-8">
@@ -242,6 +242,7 @@ BASE_HEAD = """
   }
 
   * { box-sizing: border-box; }
+  html { scroll-behavior: auto; } /* avoid animated jumps */
   body{
     margin:0;
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
@@ -445,12 +446,6 @@ BASE_HEAD = """
   tr:hover td{ background: rgba(255,255,255,.02); }
   .tablewrap{ max-height: 420px; overflow:auto; border-radius: 14px; border: 1px solid var(--line); }
 
-  .statusDot{ display:inline-flex; align-items:center; gap:8px; font-weight: 700; }
-  .dot{ width:10px; height:10px; border-radius: 999px; background: var(--muted); box-shadow: 0 0 0 4px rgba(255,255,255,.05); }
-  .dot.ok{ background: var(--accent2); box-shadow: 0 0 0 4px rgba(34,197,94,.12); }
-  .dot.warn{ background: var(--warn); box-shadow: 0 0 0 4px rgba(245,158,11,.12); }
-  .dot.bad{ background: var(--bad); box-shadow: 0 0 0 4px rgba(239,68,68,.12); }
-
   /* Modal */
   .modalBack{
     position: fixed; inset: 0;
@@ -550,37 +545,6 @@ BASE_HEAD = """
       : (dirty ? "Save settings" : "No changes to save");
   }
 
-  // Preserve scroll position across full reloads / redirects
-  function () {
-    const KEY = "agregarr_scroll_y";
-
-    // Save on scroll (throttled)
-    let t = null;
-    window.addEventListener("scroll", () => {
-      if (t) return;
-      t = setTimeout(() => {
-        sessionStorage.setItem(KEY, String(window.scrollY || 0));
-        t = null;
-      }, 80);
-    }, { passive: true });
-
-    // Restore as early as possible
-    document.addEventListener("DOMContentLoaded", () => {
-      const y = parseInt(sessionStorage.getItem(KEY) || "0", 10);
-      if (!isNaN(y) && y > 0) {
-        // Use two frames to beat layout/sticky header rendering
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => window.scrollTo(0, y));
-        });
-      }
-    });
-
-    // Save immediately before unload/navigation
-    window.addEventListener("beforeunload", () => {
-      sessionStorage.setItem(KEY, String(window.scrollY || 0));
-    });
-  }();
-
   function onSettingsEdited(e) {
     const settingsForm = document.getElementById("settingsForm");
     if (!settingsForm) return;
@@ -604,9 +568,34 @@ BASE_HEAD = """
   document.addEventListener("input", onSettingsEdited);
   document.addEventListener("change", onSettingsEdited);
 
-  document.addEventListener("DOMContentLoaded", () => {
-    updateSaveState();
-  });
+  // Preserve scroll position across reloads / redirects to stop jumping to top.
+  (function () {
+    const KEY = "agregarr_scroll_y";
+    let t = null;
+
+    window.addEventListener("scroll", () => {
+      if (t) return;
+      t = setTimeout(() => {
+        sessionStorage.setItem(KEY, String(window.scrollY || 0));
+        t = null;
+      }, 80);
+    }, { passive: true });
+
+    window.addEventListener("beforeunload", () => {
+      sessionStorage.setItem(KEY, String(window.scrollY || 0));
+    });
+
+    document.addEventListener("DOMContentLoaded", () => {
+      updateSaveState();
+
+      const y = parseInt(sessionStorage.getItem(KEY) || "0", 10);
+      if (!isNaN(y) && y > 0) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => window.scrollTo(0, y));
+        });
+      }
+    });
+  })();
 </script>
 """
 
@@ -1150,13 +1139,10 @@ def dashboard():
 
     status = (last_run.get("status") or "").lower()
     if status == "ok":
-        dot = "ok"
         status_text = "OK"
     elif status == "ok_with_errors":
-        dot = "warn"
         status_text = "OK (with errors)"
     else:
-        dot = "bad"
         status_text = "FAILED"
 
     finished_ago = time_ago(last_run.get("finished_at"))
@@ -1170,7 +1156,7 @@ def dashboard():
       <div class="kpi">
         <div class="k">
           <div class="l">Status</div>
-          <div class="v"><span class="statusDot"><span class="dot {dot}"></span>{status_text}</span></div>
+          <div class="v">{status_text}</div>
         </div>
         <div class="k">
           <div class="l">Candidates</div>
