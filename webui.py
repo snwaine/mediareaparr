@@ -64,7 +64,6 @@ def load_config():
     # Normalize theme
     t = (cfg.get("UI_THEME") or "dark").lower()
     cfg["UI_THEME"] = t if t in ("dark", "light") else "dark"
-
     cfg["RADARR_OK"] = bool(cfg.get("RADARR_OK", False))
     return cfg
 
@@ -521,15 +520,44 @@ BASE_HEAD = """
     if (e.key === "Escape") closeRunNowModal();
   });
 
-  // If Radarr fields change, disable Save until Test passes again
-  // and reset Test button label to "Test Connection".
-  document.addEventListener("input", (e) => {
+  function isDirty(settingsForm) {
+    if (!settingsForm) return false;
+    const els = settingsForm.querySelectorAll("input, select, textarea");
+    for (const el of els) {
+      const init = el.getAttribute("data-initial");
+      if (init === null) continue;
+
+      let cur;
+      if (el.type === "checkbox") cur = el.checked ? "1" : "0";
+      else cur = (el.value ?? "");
+
+      if (cur !== init) return true;
+    }
+    return false;
+  }
+
+  function updateSaveState() {
+    const settingsForm = document.getElementById("settingsForm");
+    const saveBtn = document.getElementById("saveSettingsBtn");
+    if (!settingsForm || !saveBtn) return;
+
+    const radarrOk = settingsForm.getAttribute("data-radarr-ok") === "1";
+    const dirty = isDirty(settingsForm);
+
+    saveBtn.disabled = !(radarrOk && dirty);
+    saveBtn.title = !radarrOk
+      ? "Test Radarr connection first"
+      : (dirty ? "Save settings" : "No changes to save");
+  }
+
+  function onSettingsEdited(e) {
+    const settingsForm = document.getElementById("settingsForm");
+    if (!settingsForm) return;
+
+    // If Radarr fields change: force re-test and reset the Test button label.
     if (e.target && (e.target.name === "RADARR_URL" || e.target.name === "RADARR_API_KEY")) {
-      const saveBtn = document.getElementById("saveSettingsBtn");
-      if (saveBtn) {
-        saveBtn.disabled = true;
-        saveBtn.title = "Test Radarr connection first";
-      }
+      settingsForm.setAttribute("data-radarr-ok", "0");
+
       const testBtn = document.getElementById("testRadarrBtn");
       if (testBtn) {
         testBtn.disabled = false;
@@ -537,6 +565,16 @@ BASE_HEAD = """
         testBtn.textContent = "Test Connection";
       }
     }
+
+    updateSaveState();
+  }
+
+  // IMPORTANT: listen to both (select + checkbox often use 'change')
+  document.addEventListener("input", onSettingsEdited);
+  document.addEventListener("change", onSettingsEdited);
+
+  document.addEventListener("DOMContentLoaded", () => {
+    updateSaveState();
   });
 </script>
 """
@@ -716,7 +754,6 @@ def settings():
     )
 
     radarr_ok = bool(cfg.get("RADARR_OK"))
-
     test_label = "Connected" if radarr_ok else "Test Connection"
     test_disabled_attr = "disabled" if radarr_ok else ""
     test_title = "Radarr connection is OK" if radarr_ok else "Test Radarr connection"
@@ -820,8 +857,7 @@ def settings():
 
                     <div class="field">
                       <label>UI Theme</label>
-                      <select name="UI_THEME"
-                              data-initial="{cfg.get("UI_THEME","dark")}">
+                      <select name="UI_THEME" data-initial="{cfg.get("UI_THEME","dark")}">
                         <option value="dark" {"selected" if cfg.get("UI_THEME","dark")=="dark" else ""}>Dark</option>
                         <option value="light" {"selected" if cfg.get("UI_THEME","dark")=="light" else ""}>Light</option>
                       </select>
@@ -891,6 +927,7 @@ def settings():
       </div>
     """
     return render_template_string(shell("agregarr-cleanarr • Settings", "settings", body))
+
 
 @app.post("/save")
 def save():
