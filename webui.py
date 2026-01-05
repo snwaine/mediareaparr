@@ -550,6 +550,37 @@ BASE_HEAD = """
       : (dirty ? "Save settings" : "No changes to save");
   }
 
+  // Preserve scroll position across full reloads / redirects
+  function () {
+    const KEY = "agregarr_scroll_y";
+
+    // Save on scroll (throttled)
+    let t = null;
+    window.addEventListener("scroll", () => {
+      if (t) return;
+      t = setTimeout(() => {
+        sessionStorage.setItem(KEY, String(window.scrollY || 0));
+        t = null;
+      }, 80);
+    }, { passive: true });
+
+    // Restore as early as possible
+    document.addEventListener("DOMContentLoaded", () => {
+      const y = parseInt(sessionStorage.getItem(KEY) || "0", 10);
+      if (!isNaN(y) && y > 0) {
+        // Use two frames to beat layout/sticky header rendering
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => window.scrollTo(0, y));
+        });
+      }
+    });
+
+    // Save immediately before unload/navigation
+    window.addEventListener("beforeunload", () => {
+      sessionStorage.setItem(KEY, String(window.scrollY || 0));
+    });
+  }();
+
   function onSettingsEdited(e) {
     const settingsForm = document.getElementById("settingsForm");
     if (!settingsForm) return;
