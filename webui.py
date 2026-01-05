@@ -1,1095 +1,1288 @@
-# webui.py
-# Stylish dark-first UI + optional light theme, Radarr setup grouping, Test Connection workflow,
-# Save disabled unless settings changed AND Radarr tested OK, confirm modal for Run Now when DRY_RUN is off.
-
-from __future__ import annotations
-
-import json
 import os
-import threading
-import time
-from dataclasses import dataclass, asdict
-from typing import Any, Dict, Optional, Tuple
+import json
+import signal
+from pathlib import Path
+from datetime import datetime, timezone
+from typing import Optional
 
 import requests
 from flask import (
-    Flask,
-    jsonify,
-    redirect,
-    render_template_string,
-    request,
-    send_from_directory,
-    url_for,
+    Flask, request, redirect, render_template_string,
+    flash, get_flashed_messages, send_file
 )
 
-APP_TITLE = "MediaReaparr"
-CONFIG_PATH = os.environ.get("CONFIG_PATH", "config.json")
+# --------------------------
+# Paths
+# --------------------------
+CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
+CONFIG_PATH = CONFIG_DIR / "config.json"
+STATE_PATH = CONFIG_DIR / "state.json"
+
+# Logo files (put one of these in /config or /config/logo)
+LOGO_CANDIDATES = [
+    CONFIG_DIR / "logo.png",
+    CONFIG_DIR / "logo.jpg",
+    CONFIG_DIR / "logo.jpeg",
+    CONFIG_DIR / "logo.svg",
+    CONFIG_DIR / "logo" / "logo.png",
+    CONFIG_DIR / "logo" / "logo.jpg",
+    CONFIG_DIR / "logo" / "logo.jpeg",
+    CONFIG_DIR / "logo" / "logo.svg",
+]
 
 app = Flask(__name__)
-app.config["JSON_SORT_KEYS"] = False
+app.secret_key = "mediareaparr-secret"
 
 
-# ----------------------------
-# Config
-# ----------------------------
-
-@dataclass
-class Settings:
-    # App behaviour
-    DRY_RUN: bool = True
-
-    # Radarr
-    RADARR_URL: str = ""
-    RADARR_API_KEY: str = ""
-
-    # Sonarr (optional; kept for compatibility if your backend uses it)
-    SONARR_URL: str = ""
-    SONARR_API_KEY: str = ""
-
-    # Tag + retention (example)
-    TAG_NAME: str = "autoreap"
-    DELETE_AFTER_DAYS: int = 7
+# --------------------------
+# Config / State
+# --------------------------
+def env_default(name: str, default: str = "") -> str:
+    return os.environ.get(name, default)
 
 
-def _default_settings() -> Settings:
-    return Settings()
+def load_config():
+    cfg = {
+        "RADARR_URL": env_default("RADARR_URL", "http://radarr:7878").rstrip("/"),
+        "RADARR_API_KEY": env_default("RADARR_API_KEY", ""),
+        "TAG_LABEL": env_default("TAG_LABEL", "autodelete30"),
+        "DAYS_OLD": int(env_default("DAYS_OLD", "30")),
+        "DRY_RUN": env_default("DRY_RUN", "true").lower() == "true",
+        "DELETE_FILES": env_default("DELETE_FILES", "true").lower() == "true",
+        "ADD_IMPORT_EXCLUSION": env_default("ADD_IMPORT_EXCLUSION", "false").lower() == "true",
+        "CRON_SCHEDULE": env_default("CRON_SCHEDULE", "15 3 * * *"),
+        "RUN_ON_STARTUP": env_default("RUN_ON_STARTUP", "false").lower() == "true",
+        "HTTP_TIMEOUT_SECONDS": int(env_default("HTTP_TIMEOUT_SECONDS", "30")),
+        "UI_THEME": env_default("UI_THEME", "dark"),  # "dark" or "light"
+        "RADARR_OK": False,  # must pass Test to enable Save
+    }
+
+    if CONFIG_PATH.exists():
+        try:
+            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            cfg.update({k: data[k] for k in data.keys() if k in cfg})
+        except Exception:
+            pass
+
+    # Normalize theme
+    t = (cfg.get("UI_THEME") or "dark").lower()
+    cfg["UI_THEME"] = t if t in ("dark", "light") else "dark"
+    cfg["RADARR_OK"] = bool(cfg.get("RADARR_OK", False))
+    return cfg
 
 
-def load_settings() -> Settings:
-    if not os.path.exists(CONFIG_PATH):
-        s = _default_settings()
-        save_settings(s)
-        return s
+def save_config(cfg):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
+
+def load_state():
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            raw = json.load(f) or {}
+        if STATE_PATH.exists():
+            return json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except Exception:
-        # If config is malformed, fall back to defaults rather than crashing the UI
-        raw = {}
+        pass
+    return {}
 
-    base = asdict(_default_settings())
-    base.update({k: v for k, v in raw.items() if k in base})
-    # type-safe-ish coercions
-    base["DRY_RUN"] = bool(base.get("DRY_RUN", True))
+
+def checkbox(name: str) -> bool:
+    return request.form.get(name) == "on"
+
+
+# --------------------------
+# Logo helpers
+# --------------------------
+def find_logo_path() -> Optional[Path]:
+    for p in LOGO_CANDIDATES:
+        if p.exists() and p.is_file():
+            return p
+    return None
+
+
+def logo_mime(p: Path) -> str:
+    ext = p.suffix.lower()
+    if ext == ".png":
+        return "image/png"
+    if ext in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if ext == ".svg":
+        return "image/svg+xml"
+    return "application/octet-stream"
+
+
+# --------------------------
+# Radarr helpers
+# --------------------------
+def radarr_headers(cfg):
+    return {"X-Api-Key": cfg.get("RADARR_API_KEY", "")}
+
+
+def radarr_get(cfg, path: str):
+    url = cfg["RADARR_URL"].rstrip("/") + path
+    r = requests.get(url, headers=radarr_headers(cfg), timeout=int(cfg.get("HTTP_TIMEOUT_SECONDS", 30)))
+    r.raise_for_status()
+    return r.json()
+
+
+def parse_radarr_date(s: str):
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def preview_candidates(cfg):
+    tag_label = cfg.get("TAG_LABEL", "autodelete30")
+    days_old = int(cfg.get("DAYS_OLD", 30))
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - __import__("datetime").timedelta(days=days_old)
+
+    tags = radarr_get(cfg, "/api/v3/tag")
+    tag = next((t for t in tags if t.get("label") == tag_label), None)
+    if not tag:
+        return {"error": f"Tag '{tag_label}' not found in Radarr.", "candidates": [], "cutoff": cutoff.isoformat()}
+
+    tag_id = tag["id"]
+    movies = radarr_get(cfg, "/api/v3/movie")
+
+    candidates = []
+    for m in movies:
+        if tag_id not in (m.get("tags") or []):
+            continue
+        added_str = m.get("added")
+        if not added_str:
+            continue
+        added = parse_radarr_date(added_str).astimezone(timezone.utc)
+        if added < cutoff:
+            age_days = int((now - added).total_seconds() // 86400)
+            candidates.append({
+                "id": m.get("id"),
+                "title": m.get("title"),
+                "year": m.get("year"),
+                "added": added_str,
+                "age_days": age_days,
+                "path": m.get("path"),
+            })
+
+    candidates.sort(key=lambda x: x["age_days"], reverse=True)
+    return {"error": None, "candidates": candidates, "tag_id": tag_id, "cutoff": cutoff.isoformat()}
+
+
+# --------------------------
+# Dashboard helpers
+# --------------------------
+def parse_iso(dt_str: str):
+    if not dt_str:
+        return None
+    if dt_str.endswith("Z"):
+        dt_str = dt_str[:-1] + "+00:00"
     try:
-        base["DELETE_AFTER_DAYS"] = int(base.get("DELETE_AFTER_DAYS", 7))
+        dt = datetime.fromisoformat(dt_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
-        base["DELETE_AFTER_DAYS"] = 7
-
-    return Settings(**base)
+        return None
 
 
-def save_settings(s: Settings) -> None:
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(asdict(s), f, indent=2)
+def time_ago(dt_str: str) -> str:
+    dt = parse_iso(dt_str)
+    if not dt:
+        return ""
+    now = datetime.now(timezone.utc)
+    delta = now - dt.astimezone(timezone.utc)
+    secs = int(delta.total_seconds())
+    if secs < 60:
+        return f"{secs}s ago"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}m ago"
+    hrs = mins // 60
+    if hrs < 48:
+        return f"{hrs}h ago"
+    days = hrs // 24
+    return f"{days}d ago"
 
 
-# ----------------------------
-# Simple background run stub
-# (replace run_reaper() with your actual logic)
-# ----------------------------
+# --------------------------
+# Toast (popup) messages (bottom-right)
+# --------------------------
+def render_toasts() -> str:
+    msgs = get_flashed_messages(with_categories=True)
+    if not msgs:
+        return ""
 
-RUN_STATE = {
-    "running": False,
-    "last_run_at": None,       # epoch seconds
-    "last_status": "Never ran",
-    "last_details": "",
-}
+    items = []
+    for cat, msg in msgs:
+        t = "ok" if cat == "success" else "err"
+        safe = (msg or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        items.append(f'<div class="toast {t}">{safe}</div>')
 
-
-def run_reaper(dry_run: bool) -> Tuple[bool, str]:
-    """
-    Stub for your actual Radarr/Sonarr delete logic.
-    Return (success, details).
-    """
-    # simulate some work
-    time.sleep(1.2)
-    if dry_run:
-        return True, "DRY_RUN enabled: simulated cleanup completed."
-    return True, "Cleanup completed: deleted items that matched criteria."
+    return f'<div id="toastHost" class="toastHost">{"".join(items)}</div>'
 
 
-def _run_worker(dry_run: bool) -> None:
-    RUN_STATE["running"] = True
-    RUN_STATE["last_status"] = "Running…"
-    RUN_STATE["last_details"] = ""
-    try:
-        ok, details = run_reaper(dry_run=dry_run)
-        RUN_STATE["last_run_at"] = int(time.time())
-        RUN_STATE["last_status"] = "Success" if ok else "Failed"
-        RUN_STATE["last_details"] = details
-    except Exception as e:
-        RUN_STATE["last_run_at"] = int(time.time())
-        RUN_STATE["last_status"] = "Failed"
-        RUN_STATE["last_details"] = f"Exception: {e}"
-    finally:
-        RUN_STATE["running"] = False
+# --------------------------
+# UI (Green accent in DARK theme)
+# --------------------------
+BASE_HEAD = """
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#0b0f14;
+    --panel:#0f1620;
+    --panel2:#0c121b;
+    --muted:#9aa7b2;
+    --text:#e6edf3;
+    --line:#1f2a36;
+    --line2:#283241;
 
+    /* DARK THEME ACCENT = GREEN */
+    --accent:#22c55e;
+    --accent2:#16a34a;
 
-# ----------------------------
-# Radarr Test
-# ----------------------------
+    --warn:#f59e0b;
+    --bad:#ef4444;
+    --shadow: 0 12px 30px rgba(0,0,0,.35);
+  }
 
-def test_radarr_connection(url: str, api_key: str, timeout: float = 6.0) -> Tuple[bool, str]:
-    url = (url or "").strip().rstrip("/")
-    api_key = (api_key or "").strip()
+  [data-theme="light"]{
+    --bg:#f7f8fb;
+    --panel:#ffffff;
+    --panel2:#ffffff;
+    --muted:#526171;
+    --text:#0b1220;
+    --line:#e5e7eb;
+    --line2:#d1d5db;
 
-    if not url:
-        return False, "Radarr URL is required."
-    if not api_key:
-        return False, "Radarr API key is required."
+    /* keep light theme accent slightly purple for contrast */
+    --accent:#6d28d9;
+    --accent2:#7c3aed;
 
-    # Tests /api/v3/system/status with URL + API key (but we do NOT show that helper text in the UI)
-    test_url = f"{url}/api/v3/system/status"
-    try:
-        r = requests.get(test_url, headers={"X-Api-Key": api_key}, timeout=timeout)
-        if r.status_code == 200:
-            try:
-                data = r.json()
-                ver = data.get("version", "unknown")
-                inst = data.get("instanceName", "") or ""
-                extra = f" (v{ver})" if ver else ""
-                if inst:
-                    extra += f" • {inst}"
-                return True, f"Connected{extra}"
-            except Exception:
-                return True, "Connected"
-        if r.status_code in (401, 403):
-            return False, "Unauthorized. Check API key."
-        return False, f"Radarr returned HTTP {r.status_code}."
-    except requests.exceptions.RequestException as e:
-        return False, f"Connection failed: {e}"
+    --warn:#d97706;
+    --bad:#dc2626;
+    --shadow: 0 12px 30px rgba(0,0,0,.08);
+  }
 
+  * { box-sizing: border-box; }
+  html { scroll-behavior: auto; }
+  body{
+    margin:0;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    background:
+      radial-gradient(1200px 700px at 20% 0%, rgba(34,197,94,.18), transparent 60%),
+      radial-gradient(900px 600px at 100% 10%, rgba(34,197,94,.10), transparent 55%),
+      var(--bg);
+    color: var(--text);
+  }
 
-# ----------------------------
-# Static (logo)
-# ----------------------------
+  a{ color: var(--text); text-decoration: none; }
+  a:hover{ text-decoration: underline; }
 
-@app.route("/logo/<path:filename>")
-def logo_files(filename: str):
-    # expects ./logo/logo.png (or other files) on disk
-    return send_from_directory("logo", filename)
+  .wrap{ max-width: 1200px; margin: 0 auto; padding: 22px 18px 36px; }
 
+  .topbar{
+    display:flex; align-items:center; justify-content: space-between;
+    gap:12px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+    box-shadow: var(--shadow);
+    position: sticky;
+    top: 14px;
+    z-index: 20;
+    backdrop-filter: blur(10px);
+  }
+  .brand{ display:flex; align-items:center; gap:12px; }
+  .logoWrap{
+    width: 38px; height: 38px; border-radius: 12px;
+    border: 1px solid var(--line2);
+    background: rgba(255,255,255,.03);
+    overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .logoBadge{
+    width: 38px; height: 38px; border-radius: 12px;
+    background: linear-gradient(135deg, rgba(34,197,94,.92), rgba(22,163,74,.65));
+    box-shadow: 0 10px 24px rgba(34,197,94,.20);
+  }
+  .logoImg{
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display:block;
+    background: rgba(0,0,0,.08);
+  }
 
-# ----------------------------
-# Pages
-# ----------------------------
+  .title h1{ margin:0; font-size: 16px; letter-spacing:.2px; }
+  .title .sub{ color: var(--muted); font-size: 12px; margin-top: 2px; }
 
-BASE_TEMPLATE = r"""
-<!doctype html>
-<html lang="en" data-theme="dark">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>{{ title }}</title>
+  .nav{ display:flex; align-items:center; gap:8px; flex-wrap: wrap; justify-content: flex-end; }
+  .pill{
+    border: 1px solid var(--line2);
+    background: rgba(255,255,255,.03);
+    padding: 8px 11px;
+    border-radius: 999px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .pill.active{
+    border-color: rgba(34,197,94,.65);
+    box-shadow: 0 0 0 3px rgba(34,197,94,.18);
+  }
 
-  <!-- Bootstrap (no external theme; we override via CSS variables) -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  .grid{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-top: 16px; }
 
-  <style>
-    /* -------------------------------------------------
-       Theme tokens (colour changes)
-       - dark-first, minimal, high contrast
-       - accent + success tuned for "grim reaper" vibe
-       ------------------------------------------------- */
-    :root{
-      --bg: #0b0f14;
-      --bg2:#0f1620;
-      --card:#101a26;
-      --muted:#9aa8b6;
-      --text:#eaf2ff;
-      --border: rgba(255,255,255,.08);
+  .card{
+    grid-column: span 12;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));
+    box-shadow: var(--shadow);
+    overflow:hidden;
+  }
+  .card .hd{
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    display:flex; align-items:center; justify-content: space-between;
+    gap:12px;
+    background: rgba(0,0,0,.12);
+  }
+  [data-theme="light"] .card .hd{ background: rgba(255,255,255,.55); }
+  .card .hd h2{ margin:0; font-size: 14px; letter-spacing:.2px; }
+  .card .bd{ padding: 14px 16px; }
 
-      --accent:#7c3aed; /* purple */
-      --accent2:#06b6d4; /* cyan */
-      --success:#22c55e; /* green */
-      --danger:#ef4444;
-      --warning:#f59e0b;
+  .kpi{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+  .k{
+    grid-column: span 12;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: rgba(0,0,0,.18);
+    padding: 12px 12px;
+  }
+  [data-theme="light"] .k{ background: rgba(0,0,0,.03); }
+  .k .l{ color: var(--muted); font-size: 12px; }
+  .k .v{ margin-top: 6px; font-size: 18px; font-weight: 700; }
 
-      --shadow: 0 12px 40px rgba(0,0,0,.45);
-      --radius: 18px;
+  @media(min-width: 900px){
+    .k { grid-column: span 4; }
+    .half { grid-column: span 6; }
+  }
+
+  .muted{ color: var(--muted); }
+  code{
+    background: rgba(255,255,255,.06);
+    border: 1px solid var(--line2);
+    padding: 2px 7px;
+    border-radius: 10px;
+    color: #dbeafe;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+    font-size: 12px;
+  }
+  [data-theme="light"] code{ color: #1e40af; }
+
+  .btnrow{ display:flex; gap:10px; flex-wrap: wrap; align-items:center; }
+  .btn{
+    border: 1px solid var(--line2);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 12px;
+    cursor:pointer;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .btn:hover{ border-color: rgba(34,197,94,.55); }
+  .btn:disabled{
+    opacity: .45;
+    cursor: not-allowed;
+    filter: grayscale(0.35);
+  }
+  .btn.primary{
+    border-color: rgba(34,197,94,.55);
+    background: linear-gradient(135deg, rgba(34,197,94,.28), rgba(34,197,94,.10));
+  }
+  .btn.good{
+    border-color: rgba(34,197,94,.55);
+    background: linear-gradient(135deg, rgba(34,197,94,.22), rgba(34,197,94,.08));
+  }
+  .btn.warn{
+    border-color: rgba(245,158,11,.55);
+    background: linear-gradient(135deg, rgba(245,158,11,.22), rgba(245,158,11,.08));
+  }
+  .btn.bad{
+    border-color: rgba(239,68,68,.55);
+    background: linear-gradient(135deg, rgba(239,68,68,.20), rgba(239,68,68,.08));
+  }
+
+  .form{ display:grid; grid-template-columns: 1fr; gap: 12px; }
+  @media(min-width: 900px){ .form{ grid-template-columns: 1fr 1fr; } }
+  .field{
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 10px 12px;
+    background: rgba(0,0,0,.18);
+  }
+  [data-theme="light"] .field{ background: rgba(0,0,0,.03); }
+  .field label{ display:block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .field input[type=text], .field input[type=password], .field input[type=number], .field select{
+    width: 100%;
+    border: 1px solid var(--line2);
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    padding: 10px 10px;
+    border-radius: 12px;
+    outline: none;
+  }
+  [data-theme="light"] .field input, [data-theme="light"] .field select{ background: rgba(0,0,0,.02); }
+  .field input:focus, .field select:focus{
+    border-color: rgba(34,197,94,.65);
+    box-shadow: 0 0 0 3px rgba(34,197,94,.15);
+  }
+
+  .checks{ display:flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .check{
+    display:flex; align-items:center; gap:10px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 10px 12px;
+    background: rgba(0,0,0,.18);
+  }
+  [data-theme="light"] .check{ background: rgba(0,0,0,.03); }
+  .check input{ transform: scale(1.2); }
+
+  table{ width:100%; border-collapse: collapse; overflow:hidden; border-radius: 14px; border: 1px solid var(--line); }
+  th, td{ padding: 10px 10px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }
+  th{
+    text-align:left;
+    color:#cbd5e1;
+    background: rgba(255,255,255,.04);
+    position: sticky;
+    top: 0;
+  }
+  [data-theme="light"] th{ color:#111827; background: rgba(0,0,0,.03); }
+  tr:hover td{ background: rgba(255,255,255,.02); }
+  .tablewrap{ max-height: 420px; overflow:auto; border-radius: 14px; border: 1px solid var(--line); }
+
+  /* Modal */
+  .modalBack{
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.65);
+    backdrop-filter: blur(6px);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    z-index: 9999;
+    padding: 18px;
+  }
+  .modal{
+    width: min(520px, 100%);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+    box-shadow: var(--shadow);
+    overflow:hidden;
+  }
+  .modal .mh{
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    gap: 12px;
+    background: rgba(0,0,0,.18);
+  }
+  [data-theme="light"] .modal .mh{ background: rgba(0,0,0,.03); }
+  .modal .mh h3{ margin:0; font-size: 14px; letter-spacing: .2px; }
+  .modal .mb{ padding: 14px 16px; }
+  .modal .mb p{ margin: 0 0 10px 0; color: var(--text); }
+  .modal .mb .muted{ color: var(--muted); }
+  .modal .mf{
+    padding: 14px 16px;
+    border-top: 1px solid var(--line);
+    display:flex;
+    justify-content: flex-end;
+    gap: 10px;
+    background: rgba(0,0,0,.14);
+  }
+  [data-theme="light"] .modal .mf{ background: rgba(0,0,0,.02); }
+  .xbtn{
+    border: 1px solid var(--line2);
+    background: rgba(255,255,255,.03);
+    color: var(--text);
+    width: 34px; height: 34px;
+    border-radius: 12px;
+    cursor: pointer;
+  }
+
+  /* Toasts (bottom-right popups) */
+  .toastHost{
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 99999;
+    pointer-events: none;
+    max-width: min(420px, calc(100vw - 32px));
+  }
+  .toast{
+    pointer-events: auto;
+    border: 1px solid var(--line2);
+    background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+    box-shadow: var(--shadow);
+    border-radius: 14px;
+    padding: 12px 12px;
+    font-size: 13px;
+    color: var(--text);
+    opacity: 0;
+    transform: translateY(10px);
+    animation: toastIn .18s ease-out forwards, toastOut .25s ease-in forwards;
+    animation-delay: 0s, 5s;
+  }
+  .toast.ok{ border-color: rgba(34,197,94,.55); }
+  .toast.err{ border-color: rgba(239,68,68,.55); }
+  @keyframes toastIn {
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes toastOut {
+    to { opacity: 0; transform: translateY(10px); }
+  }
+</style>
+
+<script>
+  function openRunNowModal() {
+    const back = document.getElementById("runNowBack");
+    if (back) back.style.display = "flex";
+  }
+  function closeRunNowModal() {
+    const back = document.getElementById("runNowBack");
+    if (back) back.style.display = "none";
+  }
+  function runNowSubmit() {
+    const form = document.getElementById("runNowFormConfirm");
+    if (form) form.submit();
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeRunNowModal();
+  });
+
+  function isDirty(settingsForm) {
+    if (!settingsForm) return false;
+    const els = settingsForm.querySelectorAll("input, select, textarea");
+    for (const el of els) {
+      const init = el.getAttribute("data-initial");
+      if (init === null) continue;
+
+      let cur;
+      if (el.type === "checkbox") cur = el.checked ? "1" : "0";
+      else cur = (el.value ?? "");
+
+      if (cur !== init) return true;
+    }
+    return false;
+  }
+
+  function updateSaveState() {
+    const settingsForm = document.getElementById("settingsForm");
+    const saveBtn = document.getElementById("saveSettingsBtn");
+    if (!settingsForm || !saveBtn) return;
+
+    const radarrOk = settingsForm.getAttribute("data-radarr-ok") === "1";
+    const dirty = isDirty(settingsForm);
+
+    saveBtn.disabled = !(radarrOk && dirty);
+    saveBtn.title = !radarrOk
+      ? "Test Radarr connection first"
+      : (dirty ? "Save settings" : "No changes to save");
+  }
+
+  function onSettingsEdited(e) {
+    const settingsForm = document.getElementById("settingsForm");
+    if (!settingsForm) return;
+
+    if (e.target && (e.target.name === "RADARR_URL" || e.target.name === "RADARR_API_KEY")) {
+      settingsForm.setAttribute("data-radarr-ok", "0");
+
+      const testBtn = document.getElementById("testRadarrBtn");
+      if (testBtn) {
+        testBtn.disabled = false;
+        testBtn.title = "Test Radarr connection";
+        testBtn.textContent = "Test Connection";
+      }
     }
 
-    html[data-theme="light"]{
-      --bg:#f7f8fb;
-      --bg2:#ffffff;
-      --card:#ffffff;
-      --muted:#556070;
-      --text:#0b1220;
-      --border: rgba(13,18,32,.10);
+    updateSaveState();
+  }
 
-      --accent:#6d28d9;
-      --accent2:#0891b2;
-      --success:#16a34a;
-      --danger:#dc2626;
-      --warning:#d97706;
+  document.addEventListener("input", onSettingsEdited);
+  document.addEventListener("change", onSettingsEdited);
 
-      --shadow: 0 10px 28px rgba(0,0,0,.08);
-    }
+  (function () {
+    const KEY = "mediareaparr_scroll_y";
+    let t = null;
 
-    body{
-      background: radial-gradient(1200px 900px at 10% 0%, rgba(124,58,237,.20), transparent 55%),
-                  radial-gradient(900px 700px at 95% 10%, rgba(6,182,212,.18), transparent 60%),
-                  linear-gradient(180deg, var(--bg), var(--bg2));
-      color: var(--text);
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
-      min-height: 100vh;
-    }
+    window.addEventListener("scroll", () => {
+      if (t) return;
+      t = setTimeout(() => {
+        sessionStorage.setItem(KEY, String(window.scrollY || 0));
+        t = null;
+      }, 80);
+    }, { passive: true });
 
-    .app-shell{
-      max-width: 1100px;
-      margin: 26px auto;
-      padding: 0 16px 32px;
-    }
-
-    .topbar{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap: 12px;
-      padding: 14px 16px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: rgba(16,26,38,.55);
-      backdrop-filter: blur(10px);
-      box-shadow: var(--shadow);
-    }
-    html[data-theme="light"] .topbar{
-      background: rgba(255,255,255,.72);
-    }
-
-    .brand{
-      display:flex;
-      align-items:center;
-      gap: 12px;
-      user-select:none;
-    }
-    .brand img{
-      width: 38px;
-      height: 38px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,.04);
-      padding: 6px;
-    }
-    .brand .title{
-      font-weight: 800;
-      letter-spacing:.2px;
-      line-height: 1.05;
-      margin: 0;
-    }
-    .brand .subtitle{
-      margin:0;
-      color: var(--muted);
-      font-size: .9rem;
-    }
-
-    .navpill{
-      display:flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items:center;
-      justify-content:flex-end;
-    }
-
-    .pill{
-      border: 1px solid var(--border);
-      padding: 9px 12px;
-      border-radius: 999px;
-      text-decoration:none;
-      color: var(--text);
-      background: rgba(255,255,255,.03);
-      transition: transform .08s ease, background .15s ease;
-      font-weight: 600;
-      font-size: .95rem;
-      display:inline-flex;
-      gap: 8px;
-      align-items:center;
-    }
-    .pill:hover{
-      transform: translateY(-1px);
-      background: rgba(124,58,237,.10);
-      color: var(--text);
-    }
-    .pill.active{
-      border-color: rgba(124,58,237,.55);
-      background: rgba(124,58,237,.16);
-    }
-
-    .content{
-      margin-top: 18px;
-      display:grid;
-      grid-template-columns: 1.2fr .8fr;
-      gap: 16px;
-    }
-    @media (max-width: 980px){
-      .content{ grid-template-columns: 1fr; }
-    }
-
-    .cardx{
-      border: 1px solid var(--border);
-      background: rgba(16,26,38,.55);
-      backdrop-filter: blur(10px);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      overflow:hidden;
-    }
-    html[data-theme="light"] .cardx{
-      background: rgba(255,255,255,.78);
-    }
-
-    .cardx .hd{
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--border);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap: 10px;
-    }
-    .cardx .hd h5{
-      margin:0;
-      font-weight: 800;
-      letter-spacing:.2px;
-    }
-    .cardx .bd{
-      padding: 16px;
-    }
-
-    .muted{ color: var(--muted); }
-
-    .badge-dot{
-      display:inline-flex;
-      gap:8px;
-      align-items:center;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 6px 10px;
-      background: rgba(255,255,255,.03);
-      font-weight: 700;
-      font-size: .9rem;
-      white-space: nowrap;
-    }
-    .dot{
-      width:10px;height:10px;border-radius:50%;
-      background: var(--muted);
-      box-shadow: 0 0 0 3px rgba(154,168,182,.18);
-    }
-    .dot.ok{ background: var(--success); box-shadow: 0 0 0 3px rgba(34,197,94,.22); }
-    .dot.bad{ background: var(--danger); box-shadow: 0 0 0 3px rgba(239,68,68,.20); }
-    .dot.run{ background: var(--accent2); box-shadow: 0 0 0 3px rgba(6,182,212,.20); }
-
-    .btnx{
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,.03);
-      color: var(--text);
-      padding: 10px 12px;
-      font-weight: 800;
-      transition: transform .08s ease, background .15s ease, border-color .15s ease;
-    }
-    .btnx:hover{ transform: translateY(-1px); background: rgba(124,58,237,.12); border-color: rgba(124,58,237,.40); }
-    .btnx:disabled{ opacity:.55; transform:none; cursor:not-allowed; }
-
-    .btn-accent{
-      border-color: rgba(124,58,237,.45);
-      background: rgba(124,58,237,.16);
-    }
-    .btn-dangerx{
-      border-color: rgba(239,68,68,.45);
-      background: rgba(239,68,68,.14);
-    }
-    .btn-successx{
-      border-color: rgba(34,197,94,.55);
-      background: rgba(34,197,94,.14);
-    }
-
-    .form-control, .form-select{
-      background: rgba(255,255,255,.03);
-      border: 1px solid var(--border);
-      color: var(--text);
-      border-radius: 12px;
-      padding: 10px 12px;
-    }
-    html[data-theme="light"] .form-control,
-    html[data-theme="light"] .form-select{
-      background: rgba(255,255,255,.95);
-    }
-    .form-control:focus, .form-select:focus{
-      border-color: rgba(124,58,237,.55);
-      box-shadow: 0 0 0 .25rem rgba(124,58,237,.18);
-    }
-    .form-label{ font-weight: 800; }
-    .smallhelp{ color: var(--muted); font-size: .9rem; margin-top: 6px; }
-
-    .section{
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 14px;
-      background: rgba(255,255,255,.02);
-    }
-
-    .hrx{ border-top: 1px solid var(--border); opacity: 1; margin: 16px 0; }
-
-    .toastx{
-      position: fixed;
-      right: 16px;
-      bottom: 16px;
-      min-width: 260px;
-      max-width: 440px;
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      background: rgba(16,26,38,.88);
-      box-shadow: var(--shadow);
-      padding: 12px 12px;
-      display: none;
-      z-index: 1056;
-    }
-    html[data-theme="light"] .toastx{ background: rgba(255,255,255,.94); }
-    .toastx.show{ display: block; }
-    .toastx .t1{ font-weight: 900; margin:0; }
-    .toastx .t2{ margin:6px 0 0; color: var(--muted); }
-
-    .theme-toggle{
-      display:inline-flex;
-      gap: 10px;
-      align-items:center;
-      cursor:pointer;
-      user-select:none;
-    }
-    .switch{
-      width: 48px;
-      height: 28px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,.03);
-      position: relative;
-    }
-    .knob{
-      width: 22px;height:22px;border-radius: 50%;
-      background: rgba(255,255,255,.12);
-      position:absolute; top: 50%; transform: translateY(-50%);
-      left: 4px;
-      transition: left .18s ease, background .18s ease;
-      border: 1px solid var(--border);
-    }
-    html[data-theme="light"] .knob{ left: 22px; background: rgba(13,18,32,.10); }
-  </style>
-</head>
-<body>
-  <div class="app-shell">
-
-    <div class="topbar">
-      <div class="brand">
-        <img src="{{ url_for('logo_files', filename='logo.png') }}" alt="logo" onerror="this.style.display='none'">
-        <div>
-          <p class="title h5 mb-0">{{ app_title }}</p>
-          <p class="subtitle">Auto-reap tagged media after a set time</p>
-        </div>
-      </div>
-
-      <div class="navpill">
-        <a class="pill {{ 'active' if active_page=='dashboard' else '' }}" href="{{ url_for('dashboard') }}">Dashboard</a>
-        <a class="pill {{ 'active' if active_page=='settings' else '' }}" href="{{ url_for('settings_page') }}">Settings</a>
-
-        <div class="theme-toggle pill" id="themeToggle" title="Toggle light/dark">
-          <span id="themeLabel">Dark</span>
-          <div class="switch"><div class="knob"></div></div>
-        </div>
-      </div>
-    </div>
-
-    {{ body|safe }}
-
-  </div>
-
-  <!-- Modal -->
-  <div class="modal fade" id="confirmRunModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content" style="border-radius:18px; border:1px solid var(--border); background: rgba(16,26,38,.92); color: var(--text);">
-        <div class="modal-header" style="border-bottom: 1px solid var(--border);">
-          <h5 class="modal-title" style="font-weight:900;">Confirm Run</h5>
-          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"
-                  style="filter: invert(1);"></button>
-        </div>
-        <div class="modal-body">
-          <div class="section">
-            <div style="font-weight:900;">DRY_RUN is OFF</div>
-            <div class="muted" style="margin-top:6px;">This will make real deletions. Are you sure you want to run now?</div>
-          </div>
-        </div>
-        <div class="modal-footer" style="border-top: 1px solid var(--border);">
-          <button type="button" class="btnx" data-bs-dismiss="modal">Cancel</button>
-          <button type="button" class="btnx btn-dangerx" id="confirmRunBtn">Run Anyway</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="toastx" id="toast">
-    <p class="t1" id="toastTitle">Done</p>
-    <p class="t2" id="toastBody">Saved.</p>
-  </div>
-
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-
-  <script>
-    // Theme preference
-    const themeKey = "mediareaparr.theme";
-    function applyTheme(t){
-      document.documentElement.setAttribute("data-theme", t);
-      document.getElementById("themeLabel").textContent = (t === "light") ? "Light" : "Dark";
-    }
-    const savedTheme = localStorage.getItem(themeKey) || "dark";
-    applyTheme(savedTheme);
-    document.getElementById("themeToggle").addEventListener("click", () => {
-      const cur = document.documentElement.getAttribute("data-theme") || "dark";
-      const next = (cur === "dark") ? "light" : "dark";
-      localStorage.setItem(themeKey, next);
-      applyTheme(next);
+    window.addEventListener("beforeunload", () => {
+      sessionStorage.setItem(KEY, String(window.scrollY || 0));
     });
 
-    // Toast
-    function toast(title, body){
-      const t = document.getElementById("toast");
-      document.getElementById("toastTitle").textContent = title;
-      document.getElementById("toastBody").textContent = body;
-      t.classList.add("show");
-      setTimeout(() => t.classList.remove("show"), 2400);
-    }
+    document.addEventListener("DOMContentLoaded", () => {
+      updateSaveState();
 
-    // Helpers for Settings page (no-op on dashboard)
-    window.__toast = toast;
-  </script>
+      const y = parseInt(sessionStorage.getItem(KEY) || "0", 10);
+      if (!isNaN(y) && y > 0) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => window.scrollTo(0, y));
+        });
+      }
 
-  {{ scripts|safe }}
+      // Auto-remove toast host after animations complete (~6s)
+      const host = document.getElementById("toastHost");
+      if (host) {
+        setTimeout(() => { try { host.remove(); } catch(e){} }, 6000);
+      }
+    });
+  })();
+</script>
+"""
+
+
+def shell(page_title: str, active: str, body: str):
+    cfg = load_config()
+    theme = (cfg.get("UI_THEME") or "dark").lower()
+    if theme not in ("dark", "light"):
+        theme = "dark"
+
+    def pill(name, href, key):
+        cls = "pill active" if active == key else "pill"
+        return f'<a class="{cls}" href="{href}">{name}</a>'
+
+    theme_label = "Light" if theme == "dark" else "Dark"
+    theme_btn = f"""
+      <form method="post" action="/toggle-theme" style="margin:0;">
+        <button class="pill" type="submit">Theme: {theme_label}</button>
+      </form>
+    """
+
+    nav = (
+        pill("Dashboard", "/dashboard", "dash")
+        + pill("Settings", "/settings", "settings")
+        + pill("Preview", "/preview", "preview")
+        + pill("Status", "/status", "status")
+        + theme_btn
+    )
+
+    has_logo = find_logo_path() is not None
+    logo_html = (
+        '<div class="logoWrap"><img class="logoImg" src="/logo" alt="logo"></div>'
+        if has_logo
+        else '<div class="logoBadge"></div>'
+    )
+
+    modal = """
+    <div class="modalBack" id="runNowBack" onclick="if(event.target.id==='runNowBack'){ closeRunNowModal(); }">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="runNowTitle">
+        <div class="mh">
+          <h3 id="runNowTitle">Run Now confirmation</h3>
+          <button class="xbtn" type="button" onclick="closeRunNowModal()">✕</button>
+        </div>
+        <div class="mb">
+          <p><b>Dry Run is OFF.</b> This run may delete movie files via Radarr.</p>
+          <p class="muted">If you’re not sure, turn on <b>Dry Run</b> and use <b>Preview</b> first.</p>
+        </div>
+        <div class="mf">
+          <button class="btn" type="button" onclick="closeRunNowModal()">Cancel</button>
+          <form id="runNowFormConfirm" method="post" action="/run-now" style="margin:0;">
+            <button class="btn bad" type="button" onclick="runNowSubmit()">Yes, run now</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    """
+
+    toasts = render_toasts()
+
+    return f"""
+<!doctype html>
+<html>
+<head>
+  <title>{page_title}</title>
+  {BASE_HEAD}
+</head>
+<body data-theme="{theme}">
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        {logo_html}
+        <div class="title">
+          <h1>mediareaparr</h1>
+          <div class="sub">Radarr tag + age cleanup • WebUI • cron apply • dashboard</div>
+        </div>
+      </div>
+      <div class="nav">{nav}</div>
+    </div>
+
+    {body}
+  </div>
+
+  {modal}
+  {toasts}
 </body>
 </html>
 """
 
-DASHBOARD_BODY = r"""
-<div class="content">
-  <div class="cardx">
-    <div class="hd">
-      <h5>Overview</h5>
-      <div class="badge-dot" id="runBadge">
-        <span class="dot {{ 'run' if state.running else ('ok' if state.last_status=='Success' else ('bad' if state.last_status=='Failed' else '')) }}"></span>
-        <span id="runBadgeText">
-          {% if state.running %}Running…{% else %}{{ state.last_status }}{% endif %}
-        </span>
-      </div>
-    </div>
-    <div class="bd">
-      <div class="row g-3">
-        <div class="col-md-6">
-          <div class="section">
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-              <div>
-                <div style="font-weight:900;">DRY_RUN</div>
-                <div class="muted" style="margin-top:6px;">
-                  {% if settings.DRY_RUN %}
-                    Enabled — no deletes will occur.
-                  {% else %}
-                    Disabled — real deletes will occur.
-                  {% endif %}
-                </div>
-              </div>
-              <span class="badge-dot">
-                <span class="dot {{ 'ok' if settings.DRY_RUN else 'bad' }}"></span>
-                {{ 'ON' if settings.DRY_RUN else 'OFF' }}
-              </span>
-            </div>
-          </div>
-        </div>
 
-        <div class="col-md-6">
-          <div class="section">
-            <div style="font-weight:900;">Last run</div>
-            <div class="muted" style="margin-top:6px;">
-              {% if state.last_run_at %}
-                {{ state.last_run_at_human }}
-              {% else %}
-                Never
-              {% endif %}
-            </div>
-          </div>
-        </div>
-
-        <div class="col-12">
-          <div class="section">
-            <div style="font-weight:900;">Details</div>
-            <div class="muted" style="margin-top:6px; white-space: pre-wrap;">{{ state.last_details or '—' }}</div>
-          </div>
-        </div>
-      </div>
-
-      <hr class="hrx"/>
-
-      <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <button class="btnx btn-accent" id="runNowBtn" {{ 'disabled' if state.running else '' }}>
-          Run Now
-        </button>
-        <a class="btnx" href="{{ url_for('settings_page') }}">Open Settings</a>
-      </div>
-
-      <div class="smallhelp" style="margin-top:10px;">
-        “Run Now” will start a single pass of cleanup using the current settings.
-      </div>
-    </div>
-  </div>
-
-  <div class="cardx">
-    <div class="hd">
-      <h5>Quick stats</h5>
-    </div>
-    <div class="bd">
-      <div class="section">
-        <div style="font-weight:900;">Tag</div>
-        <div class="muted" style="margin-top:6px;">{{ settings.TAG_NAME }}</div>
-      </div>
-
-      <div style="height:12px;"></div>
-
-      <div class="section">
-        <div style="font-weight:900;">Retention</div>
-        <div class="muted" style="margin-top:6px;">{{ settings.DELETE_AFTER_DAYS }} day(s)</div>
-      </div>
-
-      <div style="height:12px;"></div>
-
-      <div class="section">
-        <div style="font-weight:900;">Radarr URL</div>
-        <div class="muted" style="margin-top:6px; word-break: break-word;">
-          {{ settings.RADARR_URL or '—' }}
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-"""
-
-DASHBOARD_SCRIPTS = r"""
-<script>
-  // Dashboard "Run Now" + confirm modal when DRY_RUN is off
-  const runNowBtn = document.getElementById("runNowBtn");
-  if (runNowBtn){
-    runNowBtn.addEventListener("click", async () => {
-      const dryRun = {{ 'true' if settings.DRY_RUN else 'false' }};
-      if (!dryRun){
-        const modal = new bootstrap.Modal(document.getElementById('confirmRunModal'));
-        modal.show();
-        const confirmBtn = document.getElementById("confirmRunBtn");
-        confirmBtn.onclick = async () => {
-          confirmBtn.disabled = true;
-          await triggerRun();
-          confirmBtn.disabled = false;
-          modal.hide();
-        };
-        return;
-      }
-      await triggerRun();
-    });
-  }
-
-  async function triggerRun(){
-    try{
-      runNowBtn.disabled = true;
-      const r = await fetch("{{ url_for('run_now') }}", { method: "POST" });
-      const j = await r.json();
-      if (j.ok){
-        window.__toast("Started", "Run queued.");
-      } else {
-        window.__toast("Error", j.error || "Failed to start run.");
-      }
-      setTimeout(() => location.reload(), 650);
-    } catch(e){
-      window.__toast("Error", String(e));
-      runNowBtn.disabled = false;
-    }
-  }
-</script>
-"""
-
-SETTINGS_BODY = r"""
-<div class="content">
-  <div class="cardx">
-    <div class="hd">
-      <h5>Settings</h5>
-      <div class="badge-dot" id="saveStateBadge">
-        <span class="dot" id="saveDot"></span>
-        <span id="saveStateText">Not saved</span>
-      </div>
-    </div>
-    <div class="bd">
-      <form id="settingsForm" method="post" action="{{ url_for('save_settings_route') }}">
-        <input type="hidden" name="__csrf" value="noop" />
-
-        <div class="row g-3">
-
-          <div class="col-12">
-            <div class="section">
-              <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px; flex-wrap:wrap;">
-                <div>
-                  <div style="font-weight:900;">General</div>
-                  <div class="muted" style="margin-top:6px;">Core behaviour.</div>
-                </div>
-              </div>
-
-              <div class="row g-3" style="margin-top:6px;">
-                <div class="col-md-4">
-                  <label class="form-label">DRY_RUN</label>
-                  <select class="form-select" name="DRY_RUN" id="DRY_RUN">
-                    <option value="true" {{ 'selected' if settings.DRY_RUN else '' }}>true</option>
-                    <option value="false" {{ 'selected' if not settings.DRY_RUN else '' }}>false</option>
-                  </select>
-                  <div class="smallhelp">If false, deletions are real.</div>
-                </div>
-
-                <div class="col-md-4">
-                  <label class="form-label">Tag name</label>
-                  <input class="form-control" name="TAG_NAME" id="TAG_NAME" value="{{ settings.TAG_NAME }}">
-                </div>
-
-                <div class="col-md-4">
-                  <label class="form-label">Delete after (days)</label>
-                  <input class="form-control" type="number" min="1" name="DELETE_AFTER_DAYS" id="DELETE_AFTER_DAYS" value="{{ settings.DELETE_AFTER_DAYS }}">
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Radarr setup group (URL + API together) -->
-          <div class="col-12">
-            <div class="section">
-              <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px; flex-wrap:wrap;">
-                <div>
-                  <div style="font-weight:900;">Radarr setup</div>
-                  <div class="muted" style="margin-top:6px;">Connection details.</div>
-                </div>
-                <div class="badge-dot" id="radarrBadge">
-                  <span class="dot" id="radarrDot"></span>
-                  <span id="radarrBadgeText">Not tested</span>
-                </div>
-              </div>
-
-              <div class="row g-3" style="margin-top:6px;">
-                <div class="col-md-6">
-                  <label class="form-label">Radarr URL</label>
-                  <input class="form-control" name="RADARR_URL" id="RADARR_URL" placeholder="http://radarr:7878" value="{{ settings.RADARR_URL }}">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Radarr API key</label>
-                  <input class="form-control" name="RADARR_API_KEY" id="RADARR_API_KEY" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" value="{{ settings.RADARR_API_KEY }}">
-                </div>
-
-                <!-- Test button inside group after all fields -->
-                <div class="col-12" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-                  <button type="button" class="btnx btn-successx" id="testRadarrBtn">Test Connection</button>
-                  <div class="muted" id="radarrTestMsg" style="font-weight:700;"></div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Sonarr kept optional -->
-          <div class="col-12">
-            <div class="section">
-              <div style="font-weight:900;">Sonarr (optional)</div>
-              <div class="muted" style="margin-top:6px;">If your backend uses Sonarr too.</div>
-
-              <div class="row g-3" style="margin-top:6px;">
-                <div class="col-md-6">
-                  <label class="form-label">Sonarr URL</label>
-                  <input class="form-control" name="SONARR_URL" id="SONARR_URL" placeholder="http://sonarr:8989" value="{{ settings.SONARR_URL }}">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Sonarr API key</label>
-                  <input class="form-control" name="SONARR_API_KEY" id="SONARR_API_KEY" value="{{ settings.SONARR_API_KEY }}">
-                </div>
-              </div>
-            </div>
-          </div>
-
-        </div>
-
-        <hr class="hrx"/>
-
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button class="btnx btn-accent" type="submit" id="saveBtn" disabled>Save Settings</button>
-          <a class="btnx" href="{{ url_for('dashboard') }}">Back to Dashboard</a>
-        </div>
-
-        <div class="smallhelp" style="margin-top:10px;">
-          Save is disabled until Radarr tests OK, and only becomes enabled when you change something.
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <div class="cardx">
-    <div class="hd"><h5>Notes</h5></div>
-    <div class="bd">
-      <div class="section">
-        <div style="font-weight:900;">Workflow</div>
-        <div class="muted" style="margin-top:6px;">
-          1) Update Radarr fields<br/>
-          2) Click <b>Test Connection</b> (button will show <b>Connected</b> when success)<br/>
-          3) Modify any setting you want<br/>
-          4) Save
-        </div>
-      </div>
-
-      <div style="height:12px;"></div>
-
-      <div class="section">
-        <div style="font-weight:900;">Why save is disabled</div>
-        <div class="muted" style="margin-top:6px;">
-          Prevents saving bad Radarr details and avoids accidental writes when nothing changed.
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-"""
-
-SETTINGS_SCRIPTS = r"""
-<script>
-  // --- Settings logic:
-  // - Save disabled unless (a) settings changed AND (b) Radarr tested OK in current session
-  // - Test button turns to "Connected" when success (no success flash alert)
-  // - Keep "Not tested" status when fields are edited after a successful test
-
-  const form = document.getElementById("settingsForm");
-  const saveBtn = document.getElementById("saveBtn");
-  const saveDot = document.getElementById("saveDot");
-  const saveStateText = document.getElementById("saveStateText");
-
-  const testBtn = document.getElementById("testRadarrBtn");
-  const radarrDot = document.getElementById("radarrDot");
-  const radarrBadgeText = document.getElementById("radarrBadgeText");
-  const radarrTestMsg = document.getElementById("radarrTestMsg");
-
-  const radarrUrl = document.getElementById("RADARR_URL");
-  const radarrKey = document.getElementById("RADARR_API_KEY");
-
-  // Initial values snapshot (data-initial attributes concept, applied here)
-  const initial = {};
-  Array.from(form.elements).forEach(el => {
-    if (!el.name) return;
-    initial[el.name] = (el.type === "checkbox") ? (el.checked ? "true" : "false") : (el.value ?? "");
-  });
-
-  let radarrOk = false;
-  let dirty = false;
-
-  function setSaveState(){
-    // Save enabled only when dirty AND radarrOk
-    saveBtn.disabled = !(dirty && radarrOk);
-
-    // Badge
-    if (!dirty){
-      saveDot.className = "dot";
-      saveStateText.textContent = "No changes";
-    } else if (!radarrOk){
-      saveDot.className = "dot bad";
-      saveStateText.textContent = "Radarr not verified";
-    } else {
-      saveDot.className = "dot ok";
-      saveStateText.textContent = "Ready to save";
-    }
-  }
-
-  function setRadarrState(state, msg){
-    // state: "idle" | "ok" | "bad" | "testing"
-    if (state === "idle"){
-      radarrDot.className = "dot";
-      radarrBadgeText.textContent = "Not tested";
-      radarrTestMsg.textContent = msg || "";
-      testBtn.textContent = "Test Connection";
-      testBtn.classList.add("btn-successx");
-      testBtn.disabled = false;
-      radarrOk = false;
-    }
-    if (state === "testing"){
-      radarrDot.className = "dot run";
-      radarrBadgeText.textContent = "Testing…";
-      radarrTestMsg.textContent = msg || "";
-      testBtn.textContent = "Testing…";
-      testBtn.disabled = true;
-      radarrOk = false;
-    }
-    if (state === "ok"){
-      radarrDot.className = "dot ok";
-      radarrBadgeText.textContent = "Connected";
-      radarrTestMsg.textContent = msg || "Connected";
-      testBtn.textContent = "Connected";
-      testBtn.disabled = true; // lock in until user edits fields again
-      radarrOk = true;
-    }
-    if (state === "bad"){
-      radarrDot.className = "dot bad";
-      radarrBadgeText.textContent = "Failed";
-      radarrTestMsg.textContent = msg || "Connection failed";
-      testBtn.textContent = "Test Connection";
-      testBtn.disabled = false;
-      radarrOk = false;
-    }
-    setSaveState();
-  }
-
-  function computeDirty(){
-    dirty = false;
-    Array.from(form.elements).forEach(el => {
-      if (!el.name) return;
-      const cur = (el.type === "checkbox") ? (el.checked ? "true" : "false") : (el.value ?? "");
-      if (String(cur) !== String(initial[el.name] ?? "")) dirty = true;
-    });
-    setSaveState();
-  }
-
-  // Any change makes form dirty and (if it affects Radarr fields) invalidates Radarr test
-  form.addEventListener("input", (e) => {
-    computeDirty();
-
-    const target = e.target;
-    if (target && (target.id === "RADARR_URL" || target.id === "RADARR_API_KEY")){
-      // invalidate test on edit
-      setRadarrState("idle");
-      testBtn.disabled = false;
-      testBtn.textContent = "Test Connection";
-    }
-  });
-
-  // Test connection
-  testBtn.addEventListener("click", async () => {
-    const url = (radarrUrl.value || "").trim();
-    const key = (radarrKey.value || "").trim();
-
-    setRadarrState("testing", "Checking Radarr…");
-    try{
-      const r = await fetch("{{ url_for('api_test_radarr') }}", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, api_key: key })
-      });
-      const j = await r.json();
-      if (j.ok){
-        // No flash alert on success; just update UI
-        setRadarrState("ok", j.message || "Connected");
-        window.__toast("Connected", "Radarr connection OK.");
-      } else {
-        setRadarrState("bad", j.error || "Connection failed");
-        window.__toast("Failed", j.error || "Radarr test failed.");
-      }
-    } catch(e){
-      setRadarrState("bad", String(e));
-      window.__toast("Error", String(e));
-    }
-  });
-
-  // On load, start as "Not tested" and compute dirty
-  setRadarrState("idle");
-  computeDirty();
-
-  // On submit, let server save; show toast quickly (page redirects anyway)
-  form.addEventListener("submit", () => {
-    window.__toast("Saving", "Writing configuration…");
-  });
-</script>
-"""
-
-
-# ----------------------------
+# --------------------------
 # Routes
-# ----------------------------
-
-@app.route("/")
-def dashboard():
-    s = load_settings()
-
-    # add human time
-    state = dict(RUN_STATE)
-    if state.get("last_run_at"):
-        # render as local-ish; keep it simple
-        state["last_run_at_human"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(state["last_run_at"]))
-    else:
-        state["last_run_at_human"] = "Never"
-
-    html = render_template_string(
-        BASE_TEMPLATE,
-        title=f"{APP_TITLE} • Dashboard",
-        app_title=APP_TITLE,
-        active_page="dashboard",
-        body=render_template_string(DASHBOARD_BODY, settings=s, state=state),
-        scripts=render_template_string(DASHBOARD_SCRIPTS, settings=s),
-    )
-    return html
+# --------------------------
+@app.get("/")
+def home():
+    return redirect("/dashboard")
 
 
-@app.route("/settings", methods=["GET"])
-def settings_page():
-    s = load_settings()
-    html = render_template_string(
-        BASE_TEMPLATE,
-        title=f"{APP_TITLE} • Settings",
-        app_title=APP_TITLE,
-        active_page="settings",
-        body=render_template_string(SETTINGS_BODY, settings=s),
-        scripts=render_template_string(SETTINGS_SCRIPTS, settings=s),
-    )
-    return html
+@app.get("/logo")
+def logo():
+    p = find_logo_path()
+    if not p:
+        return ("", 404)
+    return send_file(p, mimetype=logo_mime(p), conditional=True)
 
 
-@app.route("/settings", methods=["POST"])
-def save_settings_route():
-    s = load_settings()
+@app.post("/toggle-theme")
+def toggle_theme():
+    cfg = load_config()
+    cur = (cfg.get("UI_THEME") or "dark").lower()
+    cfg["UI_THEME"] = "light" if cur != "light" else "dark"
+    save_config(cfg)
+    flash(f"Theme set to {cfg['UI_THEME']} ✔", "success")
+    return redirect(request.referrer or "/dashboard")
 
-    # Parse form
-    form = request.form
-    s.DRY_RUN = (form.get("DRY_RUN", "true").lower() == "true")
-    s.RADARR_URL = (form.get("RADARR_URL", "") or "").strip()
-    s.RADARR_API_KEY = (form.get("RADARR_API_KEY", "") or "").strip()
-    s.SONARR_URL = (form.get("SONARR_URL", "") or "").strip()
-    s.SONARR_API_KEY = (form.get("SONARR_API_KEY", "") or "").strip()
-    s.TAG_NAME = (form.get("TAG_NAME", "autoreap") or "autoreap").strip() or "autoreap"
+
+@app.post("/test-radarr")
+def test_radarr():
+    cfg = load_config()
+
+    url = (request.form.get("RADARR_URL") or cfg.get("RADARR_URL") or "").rstrip("/")
+    api_key = request.form.get("RADARR_API_KEY") or cfg.get("RADARR_API_KEY") or ""
+
+    cfg["RADARR_OK"] = False
+    save_config(cfg)
+
+    if not url:
+        flash("Radarr URL is empty.", "error")
+        return redirect("/settings")
+    if not api_key:
+        flash("Radarr API Key is empty.", "error")
+        return redirect("/settings")
+
     try:
-        s.DELETE_AFTER_DAYS = int(form.get("DELETE_AFTER_DAYS", s.DELETE_AFTER_DAYS))
-    except Exception:
-        pass
+        r = requests.get(
+            url + "/api/v3/system/status",
+            headers={"X-Api-Key": api_key},
+            timeout=int(cfg.get("HTTP_TIMEOUT_SECONDS", 30)),
+        )
+        if r.status_code in (401, 403):
+            flash("Radarr connection failed: Unauthorized (API key incorrect).", "error")
+            return redirect("/settings")
 
-    save_settings(s)
-    return redirect(url_for("settings_page"))
+        r.raise_for_status()
+
+        cfg["RADARR_OK"] = True
+        save_config(cfg)
+        return redirect("/settings")
+
+    except requests.exceptions.ConnectTimeout:
+        flash("Radarr connection failed: timeout connecting to the host.", "error")
+    except requests.exceptions.ConnectionError:
+        flash("Radarr connection failed: could not connect (URL/host/network).", "error")
+    except Exception as e:
+        flash(f"Radarr connection failed: {e}", "error")
+
+    return redirect("/settings")
 
 
-@app.route("/api/test_radarr", methods=["POST"])
-def api_test_radarr():
-    data = request.get_json(silent=True) or {}
-    url = (data.get("url") or "").strip()
-    api_key = (data.get("api_key") or "").strip()
+@app.get("/settings")
+def settings():
+    cfg = load_config()
 
-    ok, msg = test_radarr_connection(url, api_key)
-    if ok:
-        return jsonify({"ok": True, "message": msg})
-    return jsonify({"ok": False, "error": msg})
+    run_now_btn = (
+        '<form method="post" action="/run-now"><button class="btn good" type="submit">Run Now</button></form>'
+        if cfg.get("DRY_RUN", True)
+        else '<button class="btn bad" type="button" onclick="openRunNowModal()">Run Now</button>'
+    )
+
+    radarr_ok = bool(cfg.get("RADARR_OK"))
+    test_label = "Connected" if radarr_ok else "Test Connection"
+    test_disabled_attr = "disabled" if radarr_ok else ""
+    test_title = "Radarr connection is OK" if radarr_ok else "Test Radarr connection"
+
+    body = f"""
+      <div class="grid">
+
+        <div class="card">
+          <div class="hd">
+            <h2>Settings</h2>
+            <div class="btnrow">
+              {run_now_btn}
+              <form method="post" action="/apply-cron"><button class="btn warn" type="submit">Apply Cron</button></form>
+            </div>
+          </div>
+          <div class="bd">
+
+            <form id="settingsForm"
+                  method="post"
+                  action="/save"
+                  data-radarr-ok="{ '1' if radarr_ok else '0' }"
+                  style="margin-top:0px;">
+
+              <!-- Radarr setup group -->
+              <div class="card" style="box-shadow:none; margin-bottom:14px;">
+                <div class="hd">
+                  <h2>Radarr setup</h2>
+                </div>
+                <div class="bd">
+                  <div class="form">
+                    <div class="field">
+                      <label>Radarr URL</label>
+                      <input type="text"
+                             name="RADARR_URL"
+                             value="{cfg["RADARR_URL"]}"
+                             data-initial="{cfg["RADARR_URL"]}">
+                    </div>
+                    <div class="field">
+                      <label>Radarr API Key</label>
+                      <input type="password"
+                             name="RADARR_API_KEY"
+                             value="{cfg["RADARR_API_KEY"]}"
+                             data-initial="{cfg["RADARR_API_KEY"]}">
+                    </div>
+                  </div>
+
+                  <div class="btnrow" style="margin-top:14px;">
+                    <button id="testRadarrBtn"
+                            class="btn good"
+                            type="submit"
+                            formaction="/test-radarr"
+                            formmethod="post"
+                            {test_disabled_attr}
+                            title="{test_title}">{test_label}</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Cleanup + schedule group -->
+              <div class="card" style="box-shadow:none; margin-bottom:14px;">
+                <div class="hd">
+                  <h2>Cleanup rules</h2>
+                  <div class="muted">What gets deleted</div>
+                </div>
+                <div class="bd">
+                  <div class="form">
+                    <div class="field">
+                      <label>Tag Label</label>
+                      <input type="text"
+                             name="TAG_LABEL"
+                             value="{cfg["TAG_LABEL"]}"
+                             data-initial="{cfg["TAG_LABEL"]}">
+                    </div>
+                    <div class="field">
+                      <label>Days Old</label>
+                      <input type="number"
+                             min="1"
+                             name="DAYS_OLD"
+                             value="{cfg["DAYS_OLD"]}"
+                             data-initial="{cfg["DAYS_OLD"]}">
+                    </div>
+
+                    <div class="field">
+                      <label>Cron Schedule</label>
+                      <input type="text"
+                             name="CRON_SCHEDULE"
+                             value="{cfg["CRON_SCHEDULE"]}"
+                             data-initial="{cfg["CRON_SCHEDULE"]}">
+                    </div>
+                    <div class="field">
+                      <label>HTTP Timeout Seconds</label>
+                      <input type="number"
+                             min="5"
+                             name="HTTP_TIMEOUT_SECONDS"
+                             value="{cfg["HTTP_TIMEOUT_SECONDS"]}"
+                             data-initial="{cfg["HTTP_TIMEOUT_SECONDS"]}">
+                    </div>
+
+                    <div class="field">
+                      <label>UI Theme</label>
+                      <select name="UI_THEME" data-initial="{cfg.get("UI_THEME","dark")}">
+                        <option value="dark" {"selected" if cfg.get("UI_THEME","dark")=="dark" else ""}>Dark</option>
+                        <option value="light" {"selected" if cfg.get("UI_THEME","dark")=="light" else ""}>Light</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="checks" style="margin-top:12px;">
+                    <label class="check">
+                      <input type="checkbox"
+                             name="DRY_RUN"
+                             {"checked" if cfg["DRY_RUN"] else ""}
+                             data-initial="{ '1' if cfg['DRY_RUN'] else '0' }">
+                      <div>
+                        <div style="font-weight:700;">Dry Run</div>
+                        <div class="muted">Log only; no deletes.</div>
+                      </div>
+                    </label>
+
+                    <label class="check">
+                      <input type="checkbox"
+                             name="DELETE_FILES"
+                             {"checked" if cfg["DELETE_FILES"] else ""}
+                             data-initial="{ '1' if cfg['DELETE_FILES'] else '0' }">
+                      <div>
+                        <div style="font-weight:700;">Delete Files</div>
+                        <div class="muted">Remove movie files from disk.</div>
+                      </div>
+                    </label>
+
+                    <label class="check">
+                      <input type="checkbox"
+                             name="ADD_IMPORT_EXCLUSION"
+                             {"checked" if cfg["ADD_IMPORT_EXCLUSION"] else ""}
+                             data-initial="{ '1' if cfg['ADD_IMPORT_EXCLUSION'] else '0' }">
+                      <div>
+                        <div style="font-weight:700;">Add Import Exclusion</div>
+                        <div class="muted">Prevents Radarr re-import.</div>
+                      </div>
+                    </label>
+
+                    <label class="check">
+                      <input type="checkbox"
+                             name="RUN_ON_STARTUP"
+                             {"checked" if cfg["RUN_ON_STARTUP"] else ""}
+                             data-initial="{ '1' if cfg['RUN_ON_STARTUP'] else '0' }">
+                      <div>
+                        <div style="font-weight:700;">Run on startup</div>
+                        <div class="muted">Run once when container starts.</div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="btnrow" style="margin-top:14px;">
+                <button id="saveSettingsBtn"
+                        class="btn primary"
+                        type="submit"
+                        disabled
+                        title="No changes to save">Save Settings</button>
+                <a class="btn" href="/preview" style="display:inline-flex; align-items:center;">Preview Candidates</a>
+              </div>
+            </form>
+          </div>
+        </div>
+
+      </div>
+    """
+    return render_template_string(shell("mediareaparr • Settings", "settings", body))
 
 
-@app.route("/run_now", methods=["POST"])
+@app.post("/save")
+def save():
+    old = load_config()
+    cfg = load_config()
+
+    cfg["RADARR_URL"] = (request.form.get("RADARR_URL") or "").rstrip("/")
+    cfg["RADARR_API_KEY"] = request.form.get("RADARR_API_KEY") or ""
+    cfg["TAG_LABEL"] = request.form.get("TAG_LABEL") or "autodelete30"
+    cfg["DAYS_OLD"] = int(request.form.get("DAYS_OLD") or "30")
+    cfg["CRON_SCHEDULE"] = request.form.get("CRON_SCHEDULE") or "15 3 * * *"
+    cfg["HTTP_TIMEOUT_SECONDS"] = int(request.form.get("HTTP_TIMEOUT_SECONDS") or "30")
+    cfg["UI_THEME"] = (request.form.get("UI_THEME") or cfg.get("UI_THEME", "dark")).lower()
+    if cfg["UI_THEME"] not in ("dark", "light"):
+        cfg["UI_THEME"] = "dark"
+
+    cfg["DRY_RUN"] = checkbox("DRY_RUN")
+    cfg["DELETE_FILES"] = checkbox("DELETE_FILES")
+    cfg["ADD_IMPORT_EXCLUSION"] = checkbox("ADD_IMPORT_EXCLUSION")
+    cfg["RUN_ON_STARTUP"] = checkbox("RUN_ON_STARTUP")
+
+    if old.get("RADARR_URL") != cfg["RADARR_URL"] or old.get("RADARR_API_KEY") != cfg["RADARR_API_KEY"]:
+        cfg["RADARR_OK"] = False
+
+    if not cfg.get("RADARR_OK", False):
+        flash("Please click Test Connection and make sure it shows Connected before saving.", "error")
+        return redirect("/settings")
+
+    save_config(cfg)
+    flash("Settings saved ✔", "success")
+    return redirect("/settings")
+
+
+@app.post("/run-now")
 def run_now():
-    if RUN_STATE["running"]:
-        return jsonify({"ok": False, "error": "Already running."})
-
-    s = load_settings()
-    t = threading.Thread(target=_run_worker, args=(s.DRY_RUN,), daemon=True)
-    t.start()
-    return jsonify({"ok": True})
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    (CONFIG_DIR / "run_now.flag").write_text("1", encoding="utf-8")
+    flash("Run Now triggered ✔ (check Dashboard/logs)", "success")
+    return redirect("/dashboard")
 
 
-# ----------------------------
-# Entry
-# ----------------------------
+@app.post("/apply-cron")
+def apply_cron():
+    cfg = load_config()
+    schedule = (cfg.get("CRON_SCHEDULE") or "15 3 * * *").strip()
+    log_path = "/var/log/mediareaparr.log"
+
+    cron_line = f"{schedule} python /app/app.py >> {log_path} 2>&1\n"
+
+    try:
+        with open("/etc/crontabs/root", "w", encoding="utf-8") as f:
+            f.write(cron_line)
+
+        os.kill(1, signal.SIGHUP)
+        flash("Cron schedule applied successfully ✔", "success")
+    except Exception as e:
+        flash(f"Failed to apply cron: {e}", "error")
+
+    return redirect("/settings")
+
+
+@app.get("/preview")
+def preview():
+    cfg = load_config()
+
+    run_now_btn = (
+        '<form method="post" action="/run-now"><button class="btn good" type="submit">Run Now</button></form>'
+        if cfg.get("DRY_RUN", True)
+        else '<button class="btn bad" type="button" onclick="openRunNowModal()">Run Now</button>'
+    )
+
+    try:
+        result = preview_candidates(cfg)
+        error = result.get("error")
+        candidates = result.get("candidates", [])
+        cutoff = result.get("cutoff", "")
+
+        if error:
+            flash(error, "error")
+            return redirect("/settings")
+
+        rows = ""
+        for c in candidates[:500]:
+            rows += f"""
+              <tr>
+                <td>{c["age_days"]}</td>
+                <td>{c.get("title","")}</td>
+                <td>{c.get("year","")}</td>
+                <td><code>{c.get("added","")}</code></td>
+                <td>{c.get("id","")}</td>
+                <td class="muted">{(c.get("path","") or "")}</td>
+              </tr>
+            """
+
+        content = f"""
+          <div class="muted">Found <b>{len(candidates)}</b> candidate(s). Preview only (no deletes).</div>
+          <div class="muted" style="margin-top:6px;">Cutoff: <code>{cutoff}</code></div>
+          <div class="tablewrap" style="margin-top:12px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Age (days)</th>
+                  <th>Title</th>
+                  <th>Year</th>
+                  <th>Added</th>
+                  <th>ID</th>
+                  <th>Path</th>
+                </tr>
+              </thead>
+              <tbody>{rows}</tbody>
+            </table>
+          </div>
+          <div class="muted" style="margin-top:10px;">Showing up to 500.</div>
+        """
+
+        body = f"""
+          <div class="grid">
+            <div class="card">
+              <div class="hd">
+                <h2>Preview candidates</h2>
+                <div class="btnrow">
+                  <a class="btn" href="/settings">Adjust settings</a>
+                  {run_now_btn}
+                </div>
+              </div>
+              <div class="bd">
+                {content}
+              </div>
+            </div>
+          </div>
+        """
+        return render_template_string(shell("mediareaparr • Preview", "preview", body))
+
+    except Exception as e:
+        flash(f"Preview failed: {e}", "error")
+        return redirect("/dashboard")
+
+
+@app.get("/dashboard")
+def dashboard():
+    state = load_state()
+    last_run = state.get("last_run")
+    cfg = load_config()
+
+    run_now_btn = (
+        '<form method="post" action="/run-now"><button class="btn good" type="submit">Run Now</button></form>'
+        if cfg.get("DRY_RUN", True)
+        else '<button class="btn bad" type="button" onclick="openRunNowModal()">Run Now</button>'
+    )
+
+    if not last_run:
+        body = f"""
+          <div class="grid">
+            <div class="card">
+              <div class="hd">
+                <h2>Dashboard</h2>
+                <div class="btnrow">
+                  <a class="btn" href="/settings">Settings</a>
+                  <a class="btn" href="/preview">Preview</a>
+                  {run_now_btn}
+                </div>
+              </div>
+              <div class="bd">
+                <div class="muted">No runs recorded yet.</div>
+                <div class="muted" style="margin-top:8px;">
+                  Start with <b>Dry Run</b> enabled, use <a href="/preview">Preview</a>, then disable Dry Run.
+                </div>
+              </div>
+            </div>
+          </div>
+        """
+        return render_template_string(shell("mediareaparr • Dashboard", "dash", body))
+
+    status = (last_run.get("status") or "").lower()
+    if status == "ok":
+        status_text = "OK"
+    elif status == "ok_with_errors":
+        status_text = "OK (with errors)"
+    else:
+        status_text = "FAILED"
+
+    finished_ago = time_ago(last_run.get("finished_at"))
+    deleted_count = (
+        len([d for d in (last_run.get("deleted") or []) if d.get("deleted_at")])
+        if not last_run.get("dry_run") else len(last_run.get("deleted") or [])
+    )
+
+    kpis = f"""
+      <div class="kpi">
+        <div class="k">
+          <div class="l">Status</div>
+          <div class="v">{status_text}</div>
+        </div>
+        <div class="k">
+          <div class="l">Candidates</div>
+          <div class="v">{last_run.get("candidates_found", 0)}</div>
+        </div>
+        <div class="k">
+          <div class="l">Deleted (or would delete)</div>
+          <div class="v">{deleted_count}</div>
+        </div>
+      </div>
+    """
+
+    details = f"""
+      <div class="kpi" style="margin-top:12px;">
+        <div class="k half">
+          <div class="l">Finished</div>
+          <div class="v" style="font-size:14px;">
+            <code>{last_run.get("finished_at","")}</code>
+            <div class="muted" style="margin-top:6px;">{finished_ago}</div>
+          </div>
+        </div>
+        <div class="k half">
+          <div class="l">Rule</div>
+          <div class="v" style="font-size:14px; font-weight:600;">
+            Tag <code>{last_run.get("tag_label","")}</code> • older than <code>{last_run.get("days_old",0)}</code> days
+            <div class="muted" style="margin-top:6px;">
+              Dry-run: <b>{str(last_run.get("dry_run", False)).lower()}</b> • Delete files: <b>{str(last_run.get("delete_files", False)).lower()}</b>
+            </div>
+          </div>
+        </div>
+      </div>
+    """
+
+    body = f"""
+      <div class="grid">
+        <div class="card">
+          <div class="hd">
+            <h2>Dashboard</h2>
+            <div class="btnrow">
+              <a class="btn" href="/preview">Preview</a>
+              <a class="btn" href="/settings">Settings</a>
+              {run_now_btn}
+            </div>
+          </div>
+          <div class="bd">
+            {kpis}
+            {details}
+          </div>
+        </div>
+      </div>
+    """
+    return render_template_string(shell("mediareaparr • Dashboard", "dash", body))
+
+
+@app.get("/status")
+def status():
+    cfg = load_config()
+    state = load_state()
+
+    cfg_rows = "".join([f"<tr><td><code>{k}</code></td><td class='muted'>{str(v)}</td></tr>" for k, v in cfg.items()])
+    state_rows = "".join([f"<tr><td><code>{k}</code></td><td class='muted'>{str(v)[:500]}</td></tr>" for k, v in state.items()])
+
+    body = f"""
+      <div class="grid">
+        <div class="card">
+          <div class="hd"><h2>Status</h2></div>
+          <div class="bd">
+            <div class="muted">Config file: <code>{str(CONFIG_PATH)}</code> (exists: <b>{str(CONFIG_PATH.exists()).lower()}</b>)</div>
+            <div class="muted" style="margin-top:8px;">State file: <code>{str(STATE_PATH)}</code> (exists: <b>{str(STATE_PATH.exists()).lower()}</b>)</div>
+
+            <div style="margin-top:14px;" class="tablewrap">
+              <table>
+                <thead><tr><th>Config Key</th><th>Value</th></tr></thead>
+                <tbody>{cfg_rows}</tbody>
+              </table>
+            </div>
+
+            <div style="margin-top:14px;" class="tablewrap">
+              <table>
+                <thead><tr><th>State Key</th><th>Value</th></tr></thead>
+                <tbody>{state_rows}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    """
+    return render_template_string(shell("mediareaparr • Status", "status", body))
+
 
 if __name__ == "__main__":
-    # Bind on all interfaces for Docker
-    host = os.environ.get("HOST", "0.0.0.0")
-    port = int(os.environ.get("PORT", "8080"))
-    app.run(host=host, port=port, debug=False)
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--port", type=int, default=int(os.environ.get("WEBUI_PORT", "7575")))
+    args = p.parse_args()
+    app.run(host=args.host, port=args.port)
