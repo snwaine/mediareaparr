@@ -28,7 +28,7 @@ LOGO_CANDIDATES = [
 ]
 
 app = Flask(__name__)
-app.secret_key = "agregarr-cleanarr-secret"
+app.secret_key = "mediareaparr-secret"
 
 
 # --------------------------
@@ -719,7 +719,7 @@ def shell(page_title: str, active: str, body: str):
       <div class="brand">
         {logo_html}
         <div class="title">
-          <h1>agregarr-cleanarr</h1>
+          <h1>mediareaparr</h1>
           <div class="sub">Radarr tag + age cleanup • WebUI • cron apply • dashboard</div>
         </div>
       </div>
@@ -985,7 +985,7 @@ def settings():
 
       </div>
     """
-    return render_template_string(shell("agregarr-cleanarr • Settings", "settings", body))
+    return render_template_string(shell("mediareaparr • Settings", "settings", body))
 
 
 @app.post("/save")
@@ -1032,7 +1032,7 @@ def run_now():
 def apply_cron():
     cfg = load_config()
     schedule = (cfg.get("CRON_SCHEDULE") or "15 3 * * *").strip()
-    log_path = "/var/log/agregarr-cleanarr.log"
+    log_path = "/var/log/mediareaparr.log"
 
     cron_line = f"{schedule} python /app/app.py >> {log_path} 2>&1\n"
 
@@ -1118,7 +1118,7 @@ def preview():
             </div>
           </div>
         """
-        return render_template_string(shell("agregarr-cleanarr • Preview", "preview", body))
+        return render_template_string(shell("mediareaparr • Preview", "preview", body))
 
     except Exception as e:
         flash(f"Preview failed: {e}", "error")
@@ -1158,7 +1158,7 @@ def dashboard():
             </div>
           </div>
         """
-        return render_template_string(shell("agregarr-cleanarr • Dashboard", "dash", body))
+        return render_template_string(shell("mediareaparr • Dashboard", "dash", body))
 
     status = (last_run.get("status") or "").lower()
     if status == "ok":
@@ -1230,7 +1230,7 @@ def dashboard():
         </div>
       </div>
     """
-    return render_template_string(shell("agregarr-cleanarr • Dashboard", "dash", body))
+    return render_template_string(shell("mediareaparr • Dashboard", "dash", body))
 
 
 @app.get("/status")
@@ -1266,7 +1266,7 @@ def status():
         </div>
       </div>
     """
-    return render_template_string(shell("agregarr-cleanarr • Status", "status", body))
+    return render_template_string(shell("mediareaparr • Status", "status", body))
 
 
 if __name__ == "__main__":

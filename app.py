@@ -128,10 +128,10 @@ def main():
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=DAYS_OLD)
 
-        print(f"[agregarr-cleanarr] Starting run")
-        print(f"[agregarr-cleanarr] RADARR_URL={RADARR_URL}")
-        print(f"[agregarr-cleanarr] TAG_LABEL={TAG_LABEL} DAYS_OLD={DAYS_OLD} cutoff={cutoff.isoformat()}")
-        print(f"[agregarr-cleanarr] DELETE_FILES={DELETE_FILES} ADD_IMPORT_EXCLUSION={ADD_IMPORT_EXCLUSION} DRY_RUN={DRY_RUN}")
+        print(f"[mediareaparr] Starting run")
+        print(f"[mediareaparr] RADARR_URL={RADARR_URL}")
+        print(f"[mediareaparr] TAG_LABEL={TAG_LABEL} DAYS_OLD={DAYS_OLD} cutoff={cutoff.isoformat()}")
+        print(f"[mediareaparr] DELETE_FILES={DELETE_FILES} ADD_IMPORT_EXCLUSION={ADD_IMPORT_EXCLUSION} DRY_RUN={DRY_RUN}")
 
         # Find tag id
         tags = radarr_get("/api/v3/tag")
@@ -169,7 +169,7 @@ def main():
             added_str = m.get("added")
             path = m.get("path")
 
-            print(f"[agregarr-cleanarr] DELETE candidate: id={movie_id} title='{title}' added={added_str}")
+            print(f"[mediareaparr] DELETE candidate: id={movie_id} title='{title}' added={added_str}")
 
             deleted_entry = {
                 "id": movie_id,
@@ -193,10 +193,10 @@ def main():
                 run_state["deleted"].append(deleted_entry)
                 run_state["deleted_count"] = len([d for d in run_state["deleted"] if d.get("deleted_at")])
                 save_state(state)
-                print(f"[agregarr-cleanarr] Deleted: id={movie_id} title='{title}'")
+                print(f"[mediareaparr] Deleted: id={movie_id} title='{title}'")
             except Exception as e:
                 err = f"ERROR deleting id={movie_id} title='{title}': {e}"
-                print(f"[agregarr-cleanarr] {err}", file=sys.stderr)
+                print(f"[mediareaparr] {err}", file=sys.stderr)
                 run_state["errors"].append(err)
                 save_state(state)
 
@@ -219,7 +219,7 @@ def main():
         state["run_history"] = history
         save_state(state)
 
-        print(f"[agregarr-cleanarr] Run complete status={run_state['status']}")
+        print(f"[mediareaparr] Run complete status={run_state['status']}")
 
 if __name__ == "__main__":
     main()
