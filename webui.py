@@ -716,8 +716,6 @@ def settings():
     )
 
     radarr_ok = bool(cfg.get("RADARR_OK"))
-    save_disabled_attr = "disabled" if not radarr_ok else ""
-    save_title = "Test Radarr connection first" if not radarr_ok else "Save settings"
 
     test_label = "Connected" if radarr_ok else "Test Connection"
     test_disabled_attr = "disabled" if radarr_ok else ""
@@ -739,7 +737,11 @@ def settings():
             <div class="muted" style="margin-top:6px;">Logo: put <code>logo.png</code> (or jpg/svg) in <code>/config</code> or <code>/config/logo</code>.</div>
             {alerts}
 
-            <form method="post" action="/save" style="margin-top:14px;">
+            <form id="settingsForm"
+                  method="post"
+                  action="/save"
+                  data-radarr-ok="{ '1' if radarr_ok else '0' }"
+                  style="margin-top:14px;">
 
               <!-- Radarr setup group -->
               <div class="card" style="box-shadow:none; margin-bottom:14px;">
@@ -750,11 +752,17 @@ def settings():
                   <div class="form">
                     <div class="field">
                       <label>Radarr URL</label>
-                      <input type="text" name="RADARR_URL" value="{cfg["RADARR_URL"]}">
+                      <input type="text"
+                             name="RADARR_URL"
+                             value="{cfg["RADARR_URL"]}"
+                             data-initial="{cfg["RADARR_URL"]}">
                     </div>
                     <div class="field">
                       <label>Radarr API Key</label>
-                      <input type="password" name="RADARR_API_KEY" value="{cfg["RADARR_API_KEY"]}">
+                      <input type="password"
+                             name="RADARR_API_KEY"
+                             value="{cfg["RADARR_API_KEY"]}"
+                             data-initial="{cfg["RADARR_API_KEY"]}">
                     </div>
                   </div>
 
@@ -780,25 +788,40 @@ def settings():
                   <div class="form">
                     <div class="field">
                       <label>Tag Label</label>
-                      <input type="text" name="TAG_LABEL" value="{cfg["TAG_LABEL"]}">
+                      <input type="text"
+                             name="TAG_LABEL"
+                             value="{cfg["TAG_LABEL"]}"
+                             data-initial="{cfg["TAG_LABEL"]}">
                     </div>
                     <div class="field">
                       <label>Days Old</label>
-                      <input type="number" min="1" name="DAYS_OLD" value="{cfg["DAYS_OLD"]}">
+                      <input type="number"
+                             min="1"
+                             name="DAYS_OLD"
+                             value="{cfg["DAYS_OLD"]}"
+                             data-initial="{cfg["DAYS_OLD"]}">
                     </div>
 
                     <div class="field">
                       <label>Cron Schedule</label>
-                      <input type="text" name="CRON_SCHEDULE" value="{cfg["CRON_SCHEDULE"]}">
+                      <input type="text"
+                             name="CRON_SCHEDULE"
+                             value="{cfg["CRON_SCHEDULE"]}"
+                             data-initial="{cfg["CRON_SCHEDULE"]}">
                     </div>
                     <div class="field">
                       <label>HTTP Timeout Seconds</label>
-                      <input type="number" min="5" name="HTTP_TIMEOUT_SECONDS" value="{cfg["HTTP_TIMEOUT_SECONDS"]}">
+                      <input type="number"
+                             min="5"
+                             name="HTTP_TIMEOUT_SECONDS"
+                             value="{cfg["HTTP_TIMEOUT_SECONDS"]}"
+                             data-initial="{cfg["HTTP_TIMEOUT_SECONDS"]}">
                     </div>
 
                     <div class="field">
                       <label>UI Theme</label>
-                      <select name="UI_THEME">
+                      <select name="UI_THEME"
+                              data-initial="{cfg.get("UI_THEME","dark")}">
                         <option value="dark" {"selected" if cfg.get("UI_THEME","dark")=="dark" else ""}>Dark</option>
                         <option value="light" {"selected" if cfg.get("UI_THEME","dark")=="light" else ""}>Light</option>
                       </select>
@@ -807,7 +830,10 @@ def settings():
 
                   <div class="checks" style="margin-top:12px;">
                     <label class="check">
-                      <input type="checkbox" name="DRY_RUN" {"checked" if cfg["DRY_RUN"] else ""}>
+                      <input type="checkbox"
+                             name="DRY_RUN"
+                             {"checked" if cfg["DRY_RUN"] else ""}
+                             data-initial="{ '1' if cfg['DRY_RUN'] else '0' }">
                       <div>
                         <div style="font-weight:700;">Dry Run</div>
                         <div class="muted">Log only; no deletes.</div>
@@ -815,7 +841,10 @@ def settings():
                     </label>
 
                     <label class="check">
-                      <input type="checkbox" name="DELETE_FILES" {"checked" if cfg["DELETE_FILES"] else ""}>
+                      <input type="checkbox"
+                             name="DELETE_FILES"
+                             {"checked" if cfg["DELETE_FILES"] else ""}
+                             data-initial="{ '1' if cfg['DELETE_FILES'] else '0' }">
                       <div>
                         <div style="font-weight:700;">Delete Files</div>
                         <div class="muted">Remove movie files from disk.</div>
@@ -823,7 +852,10 @@ def settings():
                     </label>
 
                     <label class="check">
-                      <input type="checkbox" name="ADD_IMPORT_EXCLUSION" {"checked" if cfg["ADD_IMPORT_EXCLUSION"] else ""}>
+                      <input type="checkbox"
+                             name="ADD_IMPORT_EXCLUSION"
+                             {"checked" if cfg["ADD_IMPORT_EXCLUSION"] else ""}
+                             data-initial="{ '1' if cfg['ADD_IMPORT_EXCLUSION'] else '0' }">
                       <div>
                         <div style="font-weight:700;">Add Import Exclusion</div>
                         <div class="muted">Prevents Radarr re-import.</div>
@@ -831,7 +863,10 @@ def settings():
                     </label>
 
                     <label class="check">
-                      <input type="checkbox" name="RUN_ON_STARTUP" {"checked" if cfg["RUN_ON_STARTUP"] else ""}>
+                      <input type="checkbox"
+                             name="RUN_ON_STARTUP"
+                             {"checked" if cfg["RUN_ON_STARTUP"] else ""}
+                             data-initial="{ '1' if cfg['RUN_ON_STARTUP'] else '0' }">
                       <div>
                         <div style="font-weight:700;">Run on startup</div>
                         <div class="muted">Run once when container starts.</div>
@@ -845,8 +880,8 @@ def settings():
                 <button id="saveSettingsBtn"
                         class="btn primary"
                         type="submit"
-                        {save_disabled_attr}
-                        title="{save_title}">Save Settings</button>
+                        disabled
+                        title="No changes to save">Save Settings</button>
                 <a class="btn" href="/preview" style="display:inline-flex; align-items:center;">Preview Candidates</a>
               </div>
             </form>
@@ -856,7 +891,6 @@ def settings():
       </div>
     """
     return render_template_string(shell("agregarr-cleanarr • Settings", "settings", body))
-
 
 @app.post("/save")
 def save():
