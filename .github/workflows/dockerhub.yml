@@ -2,7 +2,7 @@ name: Build & Push (Docker Hub)
 
 on:
   push:
-    branches: ["main"]
+    branches: ["master","develop"]
     tags: ["v*"]        # push versioned tags like v1.0.0
   workflow_dispatch: {} # allow manual runs
 
@@ -33,12 +33,17 @@ jobs:
         with:
           images: snwaine/agregarr-cleanarr
           tags: |
+            # Branch tags (master -> master, develop -> develop)
+            type=ref,event=branch
+
+            # Only master gets "latest"
             type=raw,value=latest,enable={{is_default_branch}}
+
+            # Optional: push version tags when you git tag v1.0.0
             type=ref,event=tag
+
+            # Optional: always push sha tag too
             type=sha,prefix=sha-
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
         # Generates tags/labels from git refs/events :contentReference[oaicite:4]{index=4}
 
       - name: Build and push
