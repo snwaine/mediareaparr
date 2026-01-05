@@ -205,7 +205,25 @@ def time_ago(dt_str: str) -> str:
 
 
 # --------------------------
-# Stylish UI + Light/Dark Theme + Modal + No Jump Scroll Restore
+# Toast (popup) messages instead of flash banners
+# --------------------------
+def render_toasts() -> str:
+    msgs = get_flashed_messages(with_categories=True)
+    if not msgs:
+        return ""
+
+    items = []
+    for cat, msg in msgs:
+        t = "ok" if cat == "success" else "err"
+        # minimal escaping for safety
+        safe = (msg or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        items.append(f'<div class="toast {t}">{safe}</div>')
+
+    return f'<div id="toastHost" class="toastHost">{"".join(items)}</div>'
+
+
+# --------------------------
+# Stylish UI + Light/Dark Theme + Modal + No Jump Scroll Restore + Toasts
 # --------------------------
 BASE_HEAD = """
 <meta charset="utf-8">
@@ -393,10 +411,6 @@ BASE_HEAD = """
     background: linear-gradient(135deg, rgba(239,68,68,.20), rgba(239,68,68,.08));
   }
 
-  .alert{ border-radius: 14px; padding: 12px 14px; border: 1px solid var(--line2); background: rgba(255,255,255,.03); margin: 14px 0 0; }
-  .alert.success{ border-color: rgba(34,197,94,.55); }
-  .alert.error{ border-color: rgba(239,68,68,.55); }
-
   .form{ display:grid; grid-template-columns: 1fr; gap: 12px; }
   @media(min-width: 900px){ .form{ grid-template-columns: 1fr 1fr; } }
   .field{
@@ -496,6 +510,41 @@ BASE_HEAD = """
     border-radius: 12px;
     cursor: pointer;
   }
+
+  /* Toasts (bottom-right popups) */
+  .toastHost{
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 99999;
+    pointer-events: none;
+    max-width: min(420px, calc(100vw - 32px));
+  }
+  .toast{
+    pointer-events: auto;
+    border: 1px solid var(--line2);
+    background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+    box-shadow: var(--shadow);
+    border-radius: 14px;
+    padding: 12px 12px;
+    font-size: 13px;
+    color: var(--text);
+    opacity: 0;
+    transform: translateY(10px);
+    animation: toastIn .18s ease-out forwards, toastOut .25s ease-in forwards;
+    animation-delay: 0s, 15s;
+  }
+  .toast.ok{ border-color: rgba(34,197,94,.55); }
+  .toast.err{ border-color: rgba(239,68,68,.55); }
+  @keyframes toastIn {
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes toastOut {
+    to { opacity: 0; transform: translateY(10px); }
+  }
 </style>
 
 <script>
@@ -594,6 +643,12 @@ BASE_HEAD = """
           requestAnimationFrame(() => window.scrollTo(0, y));
         });
       }
+
+      // Auto-remove toast host after animations complete (16s)
+      const host = document.getElementById("toastHost");
+      if (host) {
+        setTimeout(() => { try { host.remove(); } catch(e){} }, 16000);
+      }
     });
   })();
 </script>
@@ -653,6 +708,9 @@ def shell(page_title: str, active: str, body: str):
     </div>
     """
 
+    # Toasts are included once per page render (bottom-right, auto fade in/out).
+    toasts = render_toasts()
+
     return f"""
 <!doctype html>
 <html>
@@ -677,17 +735,10 @@ def shell(page_title: str, active: str, body: str):
   </div>
 
   {modal}
+  {toasts}
 </body>
 </html>
 """
-
-
-def render_alerts():
-    html = ""
-    for category, message in get_flashed_messages(with_categories=True):
-        cls = "success" if category == "success" else "error"
-        html += f'<div class="alert {cls}">{message}</div>'
-    return html
 
 
 # --------------------------
@@ -765,7 +816,6 @@ def test_radarr():
 @app.get("/settings")
 def settings():
     cfg = load_config()
-    alerts = render_alerts()
 
     run_now_btn = (
         '<form method="post" action="/run-now"><button class="btn good" type="submit">Run Now</button></form>'
@@ -792,7 +842,6 @@ def settings():
           <div class="bd">
             <div class="muted">Saved to <code>/config/config.json</code>. Cron changes need <b>Apply Cron</b>.</div>
             <div class="muted" style="margin-top:6px;">Logo: put <code>logo.png</code> (or jpg/svg) in <code>/config</code> or <code>/config/logo</code>.</div>
-            {alerts}
 
             <form id="settingsForm"
                   method="post"
@@ -1014,7 +1063,6 @@ def apply_cron():
 @app.get("/preview")
 def preview():
     cfg = load_config()
-    alerts = render_alerts()
 
     run_now_btn = (
         '<form method="post" action="/run-now"><button class="btn good" type="submit">Run Now</button></form>'
@@ -1042,7 +1090,7 @@ def preview():
             """
 
         if error:
-            content = f'<div class="alert error">{error}</div>'
+            content = f'<div class="toast err" style="opacity:1; transform:none; animation:none;">{error}</div>'
         else:
             content = f"""
               <div class="muted">Found <b>{len(candidates)}</b> candidate(s). Preview only (no deletes).</div>
@@ -1076,7 +1124,6 @@ def preview():
                 </div>
               </div>
               <div class="bd">
-                {alerts}
                 {content}
               </div>
             </div>
@@ -1085,18 +1132,8 @@ def preview():
         return render_template_string(shell("agregarr-cleanarr • Preview", "preview", body))
 
     except Exception as e:
-        body = f"""
-          <div class="grid">
-            <div class="card">
-              <div class="hd"><h2>Preview candidates</h2></div>
-              <div class="bd">
-                {alerts}
-                <div class="alert error">{str(e)}</div>
-              </div>
-            </div>
-          </div>
-        """
-        return render_template_string(shell("agregarr-cleanarr • Preview", "preview", body)), 500
+        flash(f"Preview failed: {e}", "error")
+        return redirect("/dashboard")
 
 
 @app.get("/dashboard")
@@ -1105,7 +1142,6 @@ def dashboard():
     last_run = state.get("last_run")
     history = state.get("run_history") or []
     cfg = load_config()
-    alerts = render_alerts()
 
     run_now_btn = (
         '<form method="post" action="/run-now"><button class="btn good" type="submit">Run Now</button></form>'
@@ -1126,7 +1162,6 @@ def dashboard():
                 </div>
               </div>
               <div class="bd">
-                {alerts}
                 <div class="muted">No runs recorded yet.</div>
                 <div class="muted" style="margin-top:8px;">
                   Start with <b>Dry Run</b> enabled, use <a href="/preview">Preview</a>, then disable Dry Run.
@@ -1146,7 +1181,6 @@ def dashboard():
         status_text = "FAILED"
 
     finished_ago = time_ago(last_run.get("finished_at"))
-    error_count = len(last_run.get("errors") or [])
     deleted_count = (
         len([d for d in (last_run.get("deleted") or []) if d.get("deleted_at")])
         if not last_run.get("dry_run") else len(last_run.get("deleted") or [])
@@ -1190,124 +1224,6 @@ def dashboard():
       </div>
     """
 
-    errors_html = ""
-    if error_count > 0:
-        items = "".join([f"<li>{e}</li>" for e in (last_run.get("errors") or [])[-5:]])
-        errors_html = f"""
-          <div class="card" style="margin-top:14px;">
-            <div class="hd"><h2>Last errors</h2></div>
-            <div class="bd">
-              <ul style="margin:0; padding-left: 18px;">{items}</ul>
-            </div>
-          </div>
-        """
-
-    del_rows = ""
-    for d in (last_run.get("deleted") or [])[:50]:
-        del_rows += f"""
-          <tr>
-            <td><code>{d.get("deleted_at") or ""}</code></td>
-            <td>{d.get("age_days","")}</td>
-            <td>{d.get("title","")}</td>
-            <td>{d.get("year","")}</td>
-            <td>{d.get("id","")}</td>
-            <td class="muted">{d.get("path","") or ""}</td>
-            <td>{str(d.get("dry_run", False)).lower()}</td>
-          </tr>
-        """
-
-    deleted_table = f"""
-      <div class="card" style="margin-top:14px;">
-        <div class="hd">
-          <h2>Last deleted (most recent run)</h2>
-          <div class="muted">Showing up to 50</div>
-        </div>
-        <div class="bd">
-          <div class="tablewrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Deleted at</th>
-                  <th>Age</th>
-                  <th>Title</th>
-                  <th>Year</th>
-                  <th>ID</th>
-                  <th>Path</th>
-                  <th>Dry</th>
-                </tr>
-              </thead>
-              <tbody>
-                {del_rows if del_rows else '<tr><td colspan="7" class="muted">No entries.</td></tr>'}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    """
-
-    ago_map = {}
-    for r in history:
-        fa = r.get("finished_at")
-        if fa and fa not in ago_map:
-            ago_map[fa] = time_ago(fa)
-
-    hist_rows = ""
-    for r in history[:20]:
-        fa = r.get("finished_at") or ""
-        dr = bool(r.get("dry_run"))
-        delc = (len(r.get("deleted") or [])) if dr else int(r.get("deleted_count") or 0)
-        hist_rows += f"""
-          <tr>
-            <td><code>{fa}</code></td>
-            <td class="muted">{ago_map.get(fa,"")}</td>
-            <td>{r.get("status","")}</td>
-            <td><code>{r.get("tag_label","")}</code></td>
-            <td>{r.get("days_old","")}</td>
-            <td>{r.get("candidates_found","")}</td>
-            <td>{delc}</td>
-            <td>{str(dr).lower()}</td>
-            <td>{r.get("duration_seconds","")}</td>
-          </tr>
-        """
-
-    history_table = f"""
-      <div class="card" style="margin-top:14px;">
-        <div class="hd">
-          <h2>Run history (latest 20 shown)</h2>
-          <div class="btnrow">
-            <form method="post" action="/clear-state" onsubmit="return confirm('Clear dashboard history/state?');">
-              <button class="btn bad" type="submit">Clear state</button>
-            </form>
-          </div>
-        </div>
-        <div class="bd">
-          <div class="tablewrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Finished</th>
-                  <th>When</th>
-                  <th>Status</th>
-                  <th>Tag</th>
-                  <th>Days</th>
-                  <th>Candidates</th>
-                  <th>Deleted</th>
-                  <th>Dry</th>
-                  <th>Dur (s)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {hist_rows if hist_rows else '<tr><td colspan="9" class="muted">No history yet.</td></tr>'}
-              </tbody>
-            </table>
-          </div>
-          <div class="muted" style="margin-top:10px;">
-            Current config: Tag <code>{cfg.get("TAG_LABEL","")}</code> • Days <code>{cfg.get("DAYS_OLD","")}</code> • Dry-run <b>{str(cfg.get("DRY_RUN", True)).lower()}</b>
-          </div>
-        </div>
-      </div>
-    """
-
     body = f"""
       <div class="grid">
         <div class="card">
@@ -1320,15 +1236,10 @@ def dashboard():
             </div>
           </div>
           <div class="bd">
-            {alerts}
             {kpis}
             {details}
           </div>
         </div>
-
-        {errors_html}
-        {deleted_table}
-        {history_table}
       </div>
     """
     return render_template_string(shell("agregarr-cleanarr • Dashboard", "dash", body))
@@ -1358,7 +1269,6 @@ def status():
         <div class="card">
           <div class="hd"><h2>Status</h2></div>
           <div class="bd">
-            {render_alerts()}
             <div class="muted">Config file: <code>{str(CONFIG_PATH)}</code> (exists: <b>{str(CONFIG_PATH.exists()).lower()}</b>)</div>
             <div class="muted" style="margin-top:8px;">State file: <code>{str(STATE_PATH)}</code> (exists: <b>{str(STATE_PATH.exists()).lower()}</b>)</div>
 
