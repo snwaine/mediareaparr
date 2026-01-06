@@ -58,7 +58,7 @@ def now_iso() -> str:
 
 
 def safe_html(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def make_job_id() -> str:
@@ -107,20 +107,17 @@ def job_defaults() -> Dict[str, Any]:
         "id": make_job_id(),
         "name": "New Job",
         "enabled": True,
-
         "APP": "radarr",  # radarr | sonarr
         "TAG_LABEL": "",
         "DAYS_OLD": 30,
-
-        # Sonarr deletion behavior (only applies if APP=sonarr)
-        # episodes_only | episodes_then_series | series
-        "SONARR_DELETE_MODE": "episodes_only",
-
         "SCHED_DAY": "daily",
         "SCHED_HOUR": 3,
         "DRY_RUN": True,
         "DELETE_FILES": True,
         "ADD_IMPORT_EXCLUSION": False,
+        # Sonarr-specific mode (only used when APP=sonarr)
+        # episodes_only | episodes_then_series | series
+        "SONARR_DELETE_MODE": "episodes_only",
     }
 
 
@@ -138,10 +135,6 @@ def normalize_job(j: Dict[str, Any]) -> Dict[str, Any]:
     d["TAG_LABEL"] = str(d.get("TAG_LABEL") or "").strip()
     d["DAYS_OLD"] = clamp_int(d.get("DAYS_OLD", 30), 1, 36500, 30)
 
-    d["SONARR_DELETE_MODE"] = str(d.get("SONARR_DELETE_MODE") or "episodes_only").strip().lower()
-    if d["SONARR_DELETE_MODE"] not in ("episodes_only", "episodes_then_series", "series"):
-        d["SONARR_DELETE_MODE"] = "episodes_only"
-
     d["SCHED_DAY"] = str(d.get("SCHED_DAY") or "daily").lower()
     if d["SCHED_DAY"] not in ("daily", "mon", "tue", "wed", "thu", "fri", "sat", "sun"):
         d["SCHED_DAY"] = "daily"
@@ -150,6 +143,12 @@ def normalize_job(j: Dict[str, Any]) -> Dict[str, Any]:
     d["DRY_RUN"] = bool(d.get("DRY_RUN", True))
     d["DELETE_FILES"] = bool(d.get("DELETE_FILES", True))
     d["ADD_IMPORT_EXCLUSION"] = bool(d.get("ADD_IMPORT_EXCLUSION", False))
+
+    mode = str(d.get("SONARR_DELETE_MODE") or "episodes_only").strip().lower()
+    if mode not in ("episodes_only", "episodes_then_series", "series"):
+        mode = "episodes_only"
+    d["SONARR_DELETE_MODE"] = mode
+
     return d
 
 
@@ -414,6 +413,7 @@ BASE_HEAD = """
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root{
+    /* Lighter dark theme */
     --bg:#111827;
     --panel:#1f2937;
     --panel2:#1b2431;
@@ -454,6 +454,7 @@ BASE_HEAD = """
     min-height: 100vh;
     margin:0;
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    /* Green gradient that matches the logo */
     background:
       radial-gradient(900px 520px at 18% 8%, rgba(34,197,94,.22), transparent 62%),
       radial-gradient(880px 520px at 92% 10%, rgba(22,163,74,.16), transparent 60%),
@@ -600,8 +601,8 @@ BASE_HEAD = """
     padding: 10px 12px;
     background: var(--panel2);
     position: relative;
+    min-width: 0;
   }
-  [data-theme="light"] .field{ background: #ffffff; }
 
   .field label{ display:block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 
@@ -613,8 +614,8 @@ BASE_HEAD = """
     padding: 10px 10px;
     border-radius: 12px;
     outline: none;
+    min-width: 0;
   }
-  [data-theme="light"] .field input, [data-theme="light"] .field select{ background: #ffffff; color: #0b1220; }
 
   .field select{
     appearance: none;
@@ -634,7 +635,6 @@ BASE_HEAD = """
     background-size: 6px 6px, 6px 6px;
     background-repeat: no-repeat;
   }
-  [data-theme="light"] .field select{ background: #ffffff; }
 
   body[data-theme="dark"] .field select option{
     background-color: #1f2937;
@@ -658,7 +658,6 @@ BASE_HEAD = """
     padding: 10px 12px;
     background: var(--panel2);
   }
-  [data-theme="light"] .check{ background: #ffffff; }
   .check input{ transform: scale(1.2); }
 
   /* Toggle switch */
@@ -673,7 +672,6 @@ BASE_HEAD = """
     background: var(--panel2);
     margin-bottom: 12px;
   }
-  [data-theme="light"] .toggleRow{ background: #ffffff; }
 
   .switch{
     position: relative;
@@ -734,7 +732,6 @@ BASE_HEAD = """
     background: var(--panel2);
     overflow:hidden;
   }
-  [data-theme="light"] .jobCard{ background: #ffffff; }
   .jobTop{
     padding: 12px 12px;
     border-bottom: 1px solid var(--line);
@@ -744,7 +741,6 @@ BASE_HEAD = """
     gap: 12px;
     background: var(--panel2);
   }
-  [data-theme="light"] .jobTop{ background: #f3f4f6; }
   .jobName{ font-weight: 800; letter-spacing:.2px; }
   .jobMeta{ margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.35; }
   .jobBody{
@@ -756,7 +752,6 @@ BASE_HEAD = """
     align-items:center;
     background: var(--panel2);
   }
-  [data-theme="light"] .jobBody{ background: #ffffff; }
   .tagPill{
     border: 1px solid var(--line2);
     border-radius: 999px;
@@ -777,11 +772,10 @@ BASE_HEAD = """
     position: sticky;
     top: 0;
   }
-  [data-theme="light"] th{ color:#111827; background: #f3f4f6; }
   tr:hover td{ background: rgba(255,255,255,.03); }
   .tablewrap{ max-height: 420px; overflow:auto; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); }
 
-  /* Modal */
+  /* Modal (FIXED: footer visible + body scroll) */
   .modalBack{
     position: fixed; inset: 0;
     background: rgba(0,0,0,.68);
@@ -793,15 +787,16 @@ BASE_HEAD = """
     padding: 18px;
   }
   .modal{
-    width: min(760px, 100%);
+    width: min(720px, 100%);
     border: 1px solid var(--line);
     border-radius: 16px;
     background: var(--panel);
     box-shadow: var(--shadow);
-    overflow:hidden;
+
     max-height: calc(100vh - 40px);
     display:flex;
     flex-direction: column;
+    overflow:hidden;
   }
   .modal .mh{
     padding: 14px 16px;
@@ -813,13 +808,15 @@ BASE_HEAD = """
     background: var(--panel2);
     flex: 0 0 auto;
   }
-  [data-theme="light"] .modal .mh{ background: #f3f4f6; }
   .modal .mh h3{ margin:0; font-size: 14px; letter-spacing: .2px; }
   .modal .mb{
     padding: 14px 16px;
     background: var(--panel);
-    overflow: auto;
+
     flex: 1 1 auto;
+    min-height: 0;          /* KEY: allow scroll area to shrink */
+    overflow: auto;         /* KEY: scrollbar appears */
+    -webkit-overflow-scrolling: touch;
   }
   .modal .mf{
     padding: 14px 16px;
@@ -830,9 +827,8 @@ BASE_HEAD = """
     background: var(--panel2);
     flex: 0 0 auto;
   }
-  [data-theme="light"] .modal .mf{ background: #f3f4f6; }
 
-  /* Only show Sonarr mode block when APP=sonarr */
+  /* Sonarr mode wrapper (only show when APP=sonarr) */
   .sonarrModeWrap{ display:none; }
   .sonarrModeWrap.show{ display:block; }
 
@@ -933,19 +929,18 @@ BASE_HEAD = """
     }
   }
 
-  function updateSonarrModeVisibility() {
-    const appSel = document.getElementById("job_app");
-    const appKey = appSel ? (appSel.value || "radarr") : "radarr";
+  function updateSonarrModeVisibility(appKey) {
     const wrap = document.getElementById("sonarrModeWrap");
     if (!wrap) return;
-    wrap.classList.toggle("show", appKey === "sonarr");
+    const show = (appKey || "").toLowerCase() === "sonarr";
+    wrap.classList.toggle("show", show);
   }
 
   function onJobAppChanged() {
     const appSel = document.getElementById("job_app");
     const appKey = appSel ? (appSel.value || "radarr") : "radarr";
     rebuildTagOptions(appKey, "");
-    updateSonarrModeVisibility();
+    updateSonarrModeVisibility(appKey);
   }
 
   function openNewJob() {
@@ -960,9 +955,8 @@ BASE_HEAD = """
     const defApp = appSel?.getAttribute("data-default-app") || "radarr";
     setVal("job_app", defApp);
     rebuildTagOptions(defApp, "");
-    updateSonarrModeVisibility();
+    updateSonarrModeVisibility(defApp);
 
-    // Sonarr mode default
     setVal("job_sonarr_mode", "episodes_only");
 
     setVal("job_days", "30");
@@ -993,10 +987,9 @@ BASE_HEAD = """
 
     const tag = btn.getAttribute("data-tag") || "";
     rebuildTagOptions(appKey, tag);
+    updateSonarrModeVisibility(appKey);
 
-    // Sonarr mode (only meaningful if app=sonarr)
     setVal("job_sonarr_mode", btn.getAttribute("data-sonarr-mode") || "episodes_only");
-    updateSonarrModeVisibility();
 
     setVal("job_days", btn.getAttribute("data-days") || "30");
     setVal("job_day", btn.getAttribute("data-day") || "daily");
@@ -1116,7 +1109,6 @@ BASE_HEAD = """
     const host = document.getElementById("toastHost");
     if (host) setTimeout(() => { try { host.remove(); } catch(e){} }, 6000);
 
-    // If opened due to error redirect, restore values
     const params = new URLSearchParams(window.location.search);
     if (params.get("modal") === "job") {
       const jid = params.get("job_id") || "";
@@ -1130,7 +1122,7 @@ BASE_HEAD = """
       const dry = (params.get("DRY_RUN") || "1") === "1";
       const del = (params.get("DELETE_FILES") || "1") === "1";
       const excl = (params.get("ADD_IMPORT_EXCLUSION") || "0") === "1";
-      const sonarrMode = (params.get("SONARR_DELETE_MODE") || "episodes_only");
+      const sonMode = (params.get("SONARR_DELETE_MODE") || "episodes_only");
 
       const title = document.getElementById("jobTitle");
       if (title) title.textContent = jid ? "Edit Job" : "Add Job";
@@ -1141,6 +1133,9 @@ BASE_HEAD = """
 
       const tagDecoded = decodeURIComponent(tag || "");
       rebuildTagOptions(appKey, tagDecoded);
+      updateSonarrModeVisibility(appKey);
+
+      setVal("job_sonarr_mode", sonMode);
 
       setVal("job_days", days);
       setVal("job_day", day);
@@ -1149,16 +1144,10 @@ BASE_HEAD = """
       setChecked("job_delete", del);
       setChecked("job_excl", excl);
 
-      setVal("job_sonarr_mode", sonarrMode);
-      updateSonarrModeVisibility();
-
       // enabled moved to last
       setVal("job_enabled", enabled);
 
       showModal("jobBack");
-    } else {
-      // Ensure correct visibility on normal page load
-      updateSonarrModeVisibility();
     }
   });
 </script>
@@ -1651,13 +1640,6 @@ def jobs_page():
     </script>
     """
 
-    # Sonarr delete mode options (shown only when APP=sonarr)
-    sonarr_mode_options = """
-      <option value="episodes_only">Delete only episode files older than X days inside tagged series (keep series in Sonarr)</option>
-      <option value="episodes_then_series">Delete episodes first; delete series only if no files remain in tagged series (remove series from Sonarr)</option>
-      <option value="series">Delete whole series when older than X days in tagged (remove series from Sonarr)</option>
-    """
-
     job_modal = f"""
     <div class="modalBack" id="jobBack">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="jobTitle">
@@ -1685,16 +1667,13 @@ def jobs_page():
                 </select>
               </div>
 
-              <div id="sonarrModeWrap" class="sonarrModeWrap">
-                <div class="field" style="margin-bottom:12px;">
-                  <label>Sonarr: What to delete</label>
-                  <select name="SONARR_DELETE_MODE" id="job_sonarr_mode">
-                    {sonarr_mode_options}
-                  </select>
-                  <div class="muted" style="margin-top:8px; font-size:12px;">
-                    Uses <b>Days Old</b> as the age threshold. App runner must support these modes in <code>app.py</code>.
-                  </div>
-                </div>
+              <div class="field sonarrModeWrap" id="sonarrModeWrap">
+                <label>Sonarr Delete Mode</label>
+                <select name="SONARR_DELETE_MODE" id="job_sonarr_mode">
+                  <option value="episodes_only">Delete only episode files older than X days inside tagged series (keep series in Sonarr)</option>
+                  <option value="episodes_then_series">Delete episodes first; delete series only if no files remain in tagged series (remove series from Sonarr)</option>
+                  <option value="series">Delete whole series when older than X days in tagged</option>
+                </select>
               </div>
 
               <div class="field">
@@ -1808,16 +1787,6 @@ def jobs_page():
         delete_files = "on" if j["DELETE_FILES"] else "off"
         app_key = (j.get("APP") or "radarr").lower()
         app_label = "Radarr" if app_key == "radarr" else "Sonarr"
-        sonarr_mode = (j.get("SONARR_DELETE_MODE") or "episodes_only")
-
-        sonarr_mode_badge = ""
-        if app_key == "sonarr":
-            mode_map = {
-                "episodes_only": "Episodes only",
-                "episodes_then_series": "Episodes → Series",
-                "series": "Whole series",
-            }
-            sonarr_mode_badge = f' • Mode: <code>{safe_html(mode_map.get(sonarr_mode, sonarr_mode))}</code>'
 
         if j["DRY_RUN"]:
             run_now_html = f"""
@@ -1831,13 +1800,15 @@ def jobs_page():
               <button class="btn bad" type="button" onclick="openRunNowConfirm('{safe_html(j["id"])}')">Run Now</button>
             """
 
+        sonarr_mode = safe_html(j.get("SONARR_DELETE_MODE", "episodes_only"))
+
         job_cards.append(f"""
           <div class="jobCard">
             <div class="jobTop">
               <div>
                 <div class="jobName">{safe_html(j["name"])}</div>
                 <div class="jobMeta">
-                  App: <b>{safe_html(app_label)}</b> • Tag: <code>{safe_html(j["TAG_LABEL"])}</code>{sonarr_mode_badge} • Older than <code>{j["DAYS_OLD"]}</code> days<br>
+                  App: <b>{safe_html(app_label)}</b> • Tag: <code>{safe_html(j["TAG_LABEL"])}</code> • Older than <code>{j["DAYS_OLD"]}</code> days<br>
                   Schedule: <b>{safe_html(sched)}</b> • Dry-run: <b>{dry}</b> • Delete files: <b>{delete_files}</b>
                 </div>
               </div>
@@ -1862,13 +1833,13 @@ def jobs_page():
                         data-enabled="{ '1' if j["enabled"] else '0' }"
                         data-app="{safe_html(app_key)}"
                         data-tag="{safe_html(j["TAG_LABEL"])}"
-                        data-sonarr-mode="{safe_html(sonarr_mode)}"
                         data-days="{j["DAYS_OLD"]}"
                         data-day="{safe_html(j["SCHED_DAY"])}"
                         data-hour="{j["SCHED_HOUR"]}"
                         data-dry="{ '1' if j["DRY_RUN"] else '0' }"
                         data-del="{ '1' if j["DELETE_FILES"] else '0' }"
-                        data-excl="{ '1' if j["ADD_IMPORT_EXCLUSION"] else '0' }">Edit</button>
+                        data-excl="{ '1' if j["ADD_IMPORT_EXCLUSION"] else '0' }"
+                        data-sonarr-mode="{sonarr_mode}">Edit</button>
 
                 <form method="post" action="/jobs/delete" style="margin:0;"
                       onsubmit="return confirm('Are you sure you want to delete this job?');">
@@ -1964,14 +1935,12 @@ def jobs_save():
             "APP": app_key,
             "TAG_LABEL": tag_label,
             "DAYS_OLD": clamp_int(request.form.get("DAYS_OLD") or 30, 1, 36500, 30),
-
-            "SONARR_DELETE_MODE": sonarr_mode,
-
             "SCHED_DAY": (request.form.get("SCHED_DAY") or "daily").lower(),
             "SCHED_HOUR": clamp_int(request.form.get("SCHED_HOUR") or 3, 0, 23, 3),
             "DRY_RUN": checkbox("DRY_RUN"),
             "DELETE_FILES": checkbox("DELETE_FILES"),
             "ADD_IMPORT_EXCLUSION": checkbox("ADD_IMPORT_EXCLUSION"),
+            "SONARR_DELETE_MODE": sonarr_mode,
         }
         job = normalize_job(job)
 
@@ -2002,9 +1971,9 @@ def jobs_save():
             "enabled": request.form.get("enabled", "1"),
             "TAG_LABEL": request.form.get("TAG_LABEL", ""),
             "DAYS_OLD": request.form.get("DAYS_OLD", ""),
-            "SONARR_DELETE_MODE": request.form.get("SONARR_DELETE_MODE", "episodes_only"),
             "SCHED_DAY": request.form.get("SCHED_DAY", ""),
             "SCHED_HOUR": request.form.get("SCHED_HOUR", ""),
+            "SONARR_DELETE_MODE": request.form.get("SONARR_DELETE_MODE", "episodes_only"),
             "DRY_RUN": "1" if checkbox("DRY_RUN") else "0",
             "DELETE_FILES": "1" if checkbox("DELETE_FILES") else "0",
             "ADD_IMPORT_EXCLUSION": "1" if checkbox("ADD_IMPORT_EXCLUSION") else "0",
@@ -2141,10 +2110,6 @@ def preview():
 
         app_label = "Sonarr" if job.get("APP") == "sonarr" else "Radarr"
 
-        extra = ""
-        if job.get("APP") == "sonarr":
-            extra = f' • Mode <code>{safe_html(job.get("SONARR_DELETE_MODE","episodes_only"))}</code>'
-
         body = f"""
           <div class="grid">
             <div class="card">
@@ -2157,7 +2122,7 @@ def preview():
               </div>
               <div class="bd">
                 <div class="muted">
-                  App: <b>{safe_html(app_label)}</b>{extra} • Job: <b>{safe_html(job["name"])}</b> • Tag <code>{safe_html(job["TAG_LABEL"])}</code> • Older than <code>{job["DAYS_OLD"]}</code> days
+                  App: <b>{safe_html(app_label)}</b> • Job: <b>{safe_html(job["name"])}</b> • Tag <code>{safe_html(job["TAG_LABEL"])}</code> • Older than <code>{job["DAYS_OLD"]}</code> days
                 </div>
                 <div class="muted" style="margin-top:6px;">Found <b>{len(candidates)}</b> candidate(s). Preview only (no deletes).</div>
                 <div class="muted" style="margin-top:6px;">Cutoff: <code>{safe_html(cutoff)}</code></div>
