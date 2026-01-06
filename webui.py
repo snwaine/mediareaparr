@@ -124,7 +124,7 @@ def normalize_job(j: Dict[str, Any]) -> Dict[str, Any]:
     d["name"] = str(d.get("name") or "Job").strip()[:60] or "Job"
     d["enabled"] = bool(d.get("enabled", True))
 
-    d["TAG_LABEL"] = str(d.get("TAG_LABEL") or "autodelete30").strip()
+    d["TAG_LABEL"] = str(d.get("TAG_LABEL") or "").strip()
     d["DAYS_OLD"] = clamp_int(d.get("DAYS_OLD", 30), 1, 36500, 30)
 
     d["SCHED_DAY"] = str(d.get("SCHED_DAY") or "daily").lower()
@@ -177,6 +177,8 @@ def load_config() -> Dict[str, Any]:
     if not jobs:
         j = job_defaults()
         j["name"] = "Default Job"
+        # default tag should be empty until user selects, but keep existing behavior if you like:
+        j["TAG_LABEL"] = ""
         jobs = [normalize_job(j)]
 
     cfg["JOBS"] = jobs
@@ -223,7 +225,7 @@ def logo_mime(p: Path) -> str:
 
 
 # --------------------------
-# Radarr / Sonarr helpers
+# Radarr helpers
 # --------------------------
 def radarr_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
     return {"X-Api-Key": cfg.get("RADARR_API_KEY", "")}
@@ -246,9 +248,11 @@ def parse_radarr_date(s: str):
 
 
 def preview_candidates(cfg: Dict[str, Any], job: Dict[str, Any]):
-    tag_label = job.get("TAG_LABEL", "autodelete30")
-    days_old = int(job.get("DAYS_OLD", 30))
+    tag_label = (job.get("TAG_LABEL") or "").strip()
+    if not tag_label:
+        return {"error": "Tag is empty. Edit the job and select a tag.", "candidates": [], "cutoff": ""}
 
+    days_old = int(job.get("DAYS_OLD", 30))
     now = datetime.now(timezone.utc)
     cutoff = now - __import__("datetime").timedelta(days=days_old)
 
@@ -341,8 +345,8 @@ BASE_HEAD = """
   }
 
   * { box-sizing: border-box; }
-
   html, body { height: 100%; }
+
   body{
     min-height: 100vh;
     margin:0;
@@ -507,6 +511,7 @@ BASE_HEAD = """
   }
   [data-theme="light"] .field input, [data-theme="light"] .field select{ background: rgba(0,0,0,.02); }
 
+  /* Dropdown fixes */
   .field select{
     appearance: none;
     -webkit-appearance: none;
@@ -535,10 +540,6 @@ BASE_HEAD = """
     background-color: #ffffff;
     color: #0b1220;
   }
-  body[data-theme="dark"] .field select option:checked{
-    background-color: #1f2a36;
-    color: #e6edf3;
-  }
 
   .field input:focus, .field select:focus{
     border-color: rgba(34,197,94,.65);
@@ -556,6 +557,7 @@ BASE_HEAD = """
   [data-theme="light"] .check{ background: rgba(0,0,0,.03); }
   .check input{ transform: scale(1.2); }
 
+  /* Jobs cards */
   .jobsGrid{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
   .jobCard{
     grid-column: span 12;
@@ -600,6 +602,7 @@ BASE_HEAD = """
   tr:hover td{ background: rgba(255,255,255,.02); }
   .tablewrap{ max-height: 420px; overflow:auto; border-radius: 14px; border: 1px solid var(--line); }
 
+  /* Modal */
   .modalBack{
     position: fixed; inset: 0;
     background: rgba(0,0,0,.72);
@@ -640,6 +643,7 @@ BASE_HEAD = """
   }
   [data-theme="light"] .modal .mf{ background: rgba(0,0,0,.02); }
 
+  /* Toasts */
   .toastHost{
     position: fixed;
     right: 16px;
@@ -672,6 +676,7 @@ BASE_HEAD = """
 </style>
 
 <script>
+  // ---------- Modal helpers ----------
   function showModal(id) {
     const back = document.getElementById(id);
     if (back) back.style.display = "flex";
@@ -681,6 +686,101 @@ BASE_HEAD = """
     if (back) back.style.display = "none";
   }
 
+  // Job modal should only close via Cancel/Save redirect:
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      hideModal("runNowBack"); // only this one
+    }
+  });
+
+  function setVal(id, v) {
+    const el = document.getElementById(id);
+    if (el) el.value = v;
+  }
+  function setChecked(id, v) {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!v;
+  }
+
+  // Ensure job tag select can show a value even if it's not in Radarr anymore
+  function ensureSelectOption(selectId, value) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    const v = (value ?? "").toString();
+    if (!v) return;
+
+    for (const opt of sel.options) {
+      if (opt.value === v) return;
+    }
+
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v + " (missing in Radarr)";
+    sel.insertBefore(opt, sel.firstChild);
+  }
+
+  // ---------- Job modal ----------
+  function openNewJob() {
+    const form = document.getElementById("jobForm");
+    if (!form) return;
+
+    form.action = "/jobs/save";
+    setVal("job_id", "");
+    setVal("job_name", "New Job");
+    setVal("job_enabled", "1");
+
+    // tag starts empty until user picks
+    setVal("job_tag", "");
+
+    setVal("job_days", "30");
+    setVal("job_day", "daily");
+    setVal("job_hour", "3");
+    setChecked("job_dry", true);
+    setChecked("job_delete", true);
+    setChecked("job_excl", false);
+
+    const t = document.getElementById("jobTitle");
+    if (t) t.textContent = "Add Job";
+    showModal("jobBack");
+  }
+
+  function openEditJob(btn) {
+    const form = document.getElementById("jobForm");
+    if (!form || !btn) return;
+
+    form.action = "/jobs/save";
+    setVal("job_id", btn.getAttribute("data-id") || "");
+    setVal("job_name", btn.getAttribute("data-name") || "Job");
+    setVal("job_enabled", (btn.getAttribute("data-enabled") || "1"));
+
+    const tag = btn.getAttribute("data-tag") || "";
+    ensureSelectOption("job_tag", tag);
+    setVal("job_tag", tag);
+
+    setVal("job_days", btn.getAttribute("data-days") || "30");
+    setVal("job_day", btn.getAttribute("data-day") || "daily");
+    setVal("job_hour", btn.getAttribute("data-hour") || "3");
+    setChecked("job_dry", (btn.getAttribute("data-dry") || "1") === "1");
+    setChecked("job_delete", (btn.getAttribute("data-del") || "1") === "1");
+    setChecked("job_excl", (btn.getAttribute("data-excl") || "0") === "1");
+
+    const t = document.getElementById("jobTitle");
+    if (t) t.textContent = "Edit Job";
+    showModal("jobBack");
+  }
+
+  // ---------- Run Now confirm ----------
+  function openRunNowConfirm(jobId) {
+    const hid = document.getElementById("runNowJobId");
+    if (hid) hid.value = jobId || "";
+    showModal("runNowBack");
+  }
+  function runNowSubmitConfirm() {
+    const form = document.getElementById("runNowFormConfirm");
+    if (form) form.submit();
+  }
+
+  // ---------- Settings: dirty + save gating ----------
   function isDirty(settingsForm) {
     if (!settingsForm) return false;
     const els = settingsForm.querySelectorAll("input, select, textarea");
@@ -747,8 +847,46 @@ BASE_HEAD = """
   document.addEventListener("input", onSettingsEdited);
   document.addEventListener("change", onSettingsEdited);
 
+  // ---------- Reopen job modal after server-side validation errors ----------
   document.addEventListener("DOMContentLoaded", () => {
     updateSaveState();
+
+    const host = document.getElementById("toastHost");
+    if (host) setTimeout(() => { try { host.remove(); } catch(e){} }, 6000);
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("modal") === "job") {
+      const jid = params.get("job_id") || "";
+      const name = params.get("name") || "New Job";
+      const enabled = params.get("enabled") || "1";
+      const tag = params.get("TAG_LABEL") || "";
+      const days = params.get("DAYS_OLD") || "30";
+      const day = params.get("SCHED_DAY") || "daily";
+      const hour = params.get("SCHED_HOUR") || "3";
+      const dry = (params.get("DRY_RUN") || "1") === "1";
+      const del = (params.get("DELETE_FILES") || "1") === "1";
+      const excl = (params.get("ADD_IMPORT_EXCLUSION") || "0") === "1";
+
+      const title = document.getElementById("jobTitle");
+      if (title) title.textContent = jid ? "Edit Job" : "Add Job";
+
+      setVal("job_id", jid);
+      setVal("job_name", decodeURIComponent(name));
+      setVal("job_enabled", enabled);
+
+      const tagDecoded = decodeURIComponent(tag || "");
+      ensureSelectOption("job_tag", tagDecoded);
+      setVal("job_tag", tagDecoded);
+
+      setVal("job_days", days);
+      setVal("job_day", day);
+      setVal("job_hour", hour);
+      setChecked("job_dry", dry);
+      setChecked("job_delete", del);
+      setChecked("job_excl", excl);
+
+      showModal("jobBack");
+    }
   });
 </script>
 """
@@ -976,9 +1114,6 @@ def settings():
     sonarr_test_disabled_attr = "disabled" if sonarr_ok else ""
     sonarr_test_title = "Sonarr connection is OK" if sonarr_ok else "Test Sonarr connection"
 
-    # IMPORTANT FIX:
-    # - DO NOT nest <form> tags inside the main settings form.
-    # - Use formaction/formmethod on buttons for Reset/Test.
     body = f"""
       <div class="grid">
         <div class="card">
@@ -1150,22 +1285,16 @@ def save_settings():
     return redirect("/settings")
 
 
-# --------------------------
-# Jobs / apply-cron / etc.
-# (unchanged from your previous working version)
-# --------------------------
 @app.get("/jobs")
 def jobs_page():
     cfg = load_config()
 
+    # Fetch Radarr tags for Tag Label dropdown
     labels = []
-    if cfg.get("RADARR_URL") and cfg.get("RADARR_API_KEY"):
+    if cfg.get("RADARR_URL") and cfg.get("RADARR_API_KEY") and cfg.get("RADARR_OK"):
         try:
             tags = radarr_get(cfg, "/api/v3/tag")
-            labels = sorted(
-                {t.get("label") for t in (tags or []) if t.get("label")},
-                key=lambda x: str(x).lower()
-            )
+            labels = sorted({t.get("label") for t in (tags or []) if t.get("label")}, key=lambda x: str(x).lower())
         except Exception:
             labels = []
 
@@ -1271,6 +1400,27 @@ def jobs_page():
     </div>
     """
 
+    run_confirm_modal = """
+    <div class="modalBack" id="runNowBack">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="runNowTitle">
+        <div class="mh">
+          <h3 id="runNowTitle">Run Now confirmation</h3>
+        </div>
+        <div class="mb">
+          <p><b>Dry Run is OFF.</b> This job may delete movie files via Radarr.</p>
+          <p class="muted">If you’re not sure, edit the job and enable <b>Dry Run</b>, then use Preview.</p>
+        </div>
+        <div class="mf">
+          <button class="btn" type="button" onclick="hideModal('runNowBack')">Cancel</button>
+          <form id="runNowFormConfirm" method="post" action="/jobs/run-now" style="margin:0;">
+            <input type="hidden" id="runNowJobId" name="job_id" value="">
+            <button class="btn bad" type="button" onclick="runNowSubmitConfirm()">Yes, run now</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    """
+
     job_cards = []
     for j in cfg["JOBS"]:
         sched = schedule_label(j["SCHED_DAY"], j["SCHED_HOUR"])
@@ -1278,6 +1428,18 @@ def jobs_page():
         enabled_text = "Enabled" if j["enabled"] else "Disabled"
         dry = "on" if j["DRY_RUN"] else "OFF"
         delete_files = "on" if j["DELETE_FILES"] else "off"
+
+        if j["DRY_RUN"]:
+            run_now_html = f"""
+              <form method="post" action="/jobs/run-now" style="margin:0;">
+                <input type="hidden" name="job_id" value="{safe_html(j["id"])}">
+                <button class="btn good" type="submit">Run Now</button>
+              </form>
+            """
+        else:
+            run_now_html = f"""
+              <button class="btn bad" type="button" onclick="openRunNowConfirm('{safe_html(j["id"])}')">Run Now</button>
+            """
 
         job_cards.append(f"""
           <div class="jobCard">
@@ -1290,6 +1452,7 @@ def jobs_page():
                 </div>
               </div>
               <div class="btnrow">
+                {run_now_html}
                 <a class="btn" href="/preview?job_id={safe_html(j["id"])}">Preview</a>
               </div>
             </div>
@@ -1301,6 +1464,20 @@ def jobs_page():
               </div>
 
               <div class="btnrow">
+                <button class="btn"
+                        type="button"
+                        onclick="openEditJob(this)"
+                        data-id="{safe_html(j["id"])}"
+                        data-name="{safe_html(j["name"])}"
+                        data-enabled="{ '1' if j["enabled"] else '0' }"
+                        data-tag="{safe_html(j["TAG_LABEL"])}"
+                        data-days="{j["DAYS_OLD"]}"
+                        data-day="{safe_html(j["SCHED_DAY"])}"
+                        data-hour="{j["SCHED_HOUR"]}"
+                        data-dry="{ '1' if j["DRY_RUN"] else '0' }"
+                        data-del="{ '1' if j["DELETE_FILES"] else '0' }"
+                        data-excl="{ '1' if j["ADD_IMPORT_EXCLUSION"] else '0' }">Edit</button>
+
                 <form method="post" action="/jobs/delete" style="margin:0;"
                       onsubmit="return confirm('Are you sure you want to delete this job?');">
                   <input type="hidden" name="job_id" value="{safe_html(j["id"])}">
@@ -1316,6 +1493,12 @@ def jobs_page():
         <div class="card">
           <div class="hd">
             <h2>Jobs</h2>
+            <div class="btnrow">
+              <button class="btn primary" type="button" onclick="openNewJob()">Add Job</button>
+              <form method="post" action="/apply-cron" style="margin:0;">
+                <button class="btn warn" type="submit">Apply Cron</button>
+              </form>
+            </div>
           </div>
 
           <div class="bd">
@@ -1327,8 +1510,100 @@ def jobs_page():
       </div>
 
       {job_modal}
+      {run_confirm_modal}
     """
     return render_template_string(shell("mediareaparr • Jobs", "jobs", body))
+
+
+@app.post("/jobs/save")
+def jobs_save():
+    cfg = load_config()
+    try:
+        job_id = (request.form.get("job_id") or "").strip()
+        name = (request.form.get("name") or "Job").strip()
+        enabled = (request.form.get("enabled") or "1").strip() == "1"
+
+        tag_label = (request.form.get("TAG_LABEL") or "").strip()
+        if not tag_label:
+            raise ValueError("Please select a tag.")
+
+        job = {
+            "id": job_id or make_job_id(),
+            "name": name,
+            "enabled": enabled,
+            "TAG_LABEL": tag_label,
+            "DAYS_OLD": clamp_int(request.form.get("DAYS_OLD") or 30, 1, 36500, 30),
+            "SCHED_DAY": (request.form.get("SCHED_DAY") or "daily").lower(),
+            "SCHED_HOUR": clamp_int(request.form.get("SCHED_HOUR") or 3, 0, 23, 3),
+            "DRY_RUN": checkbox("DRY_RUN"),
+            "DELETE_FILES": checkbox("DELETE_FILES"),
+            "ADD_IMPORT_EXCLUSION": checkbox("ADD_IMPORT_EXCLUSION"),
+        }
+        job = normalize_job(job)
+
+        jobs = cfg.get("JOBS") or []
+        replaced = False
+        for i, j in enumerate(jobs):
+            if str(j.get("id")) == job["id"]:
+                jobs[i] = job
+                replaced = True
+                break
+        if not replaced:
+            jobs.append(job)
+
+        cfg["JOBS"] = [normalize_job(j) for j in jobs]
+        save_config(cfg)
+
+        flash("Job saved ✔", "success")
+        return redirect("/jobs")
+
+    except Exception as e:
+        flash(str(e), "error")
+        from urllib.parse import urlencode
+        qs = urlencode({
+            "modal": "job",
+            "job_id": request.form.get("job_id", ""),
+            "name": request.form.get("name", ""),
+            "enabled": request.form.get("enabled", "1"),
+            "TAG_LABEL": request.form.get("TAG_LABEL", ""),
+            "DAYS_OLD": request.form.get("DAYS_OLD", ""),
+            "SCHED_DAY": request.form.get("SCHED_DAY", ""),
+            "SCHED_HOUR": request.form.get("SCHED_HOUR", ""),
+            "DRY_RUN": "1" if checkbox("DRY_RUN") else "0",
+            "DELETE_FILES": "1" if checkbox("DELETE_FILES") else "0",
+            "ADD_IMPORT_EXCLUSION": "1" if checkbox("ADD_IMPORT_EXCLUSION") else "0",
+        }, doseq=False)
+        return redirect(f"/jobs?{qs}")
+
+
+@app.post("/jobs/delete")
+def jobs_delete():
+    cfg = load_config()
+    job_id = (request.form.get("job_id") or "").strip()
+    jobs = [j for j in (cfg.get("JOBS") or []) if str(j.get("id")) != job_id]
+    if not jobs:
+        j = job_defaults()
+        j["name"] = "Default Job"
+        j["TAG_LABEL"] = ""
+        jobs = [normalize_job(j)]
+
+    cfg["JOBS"] = [normalize_job(j) for j in jobs]
+    save_config(cfg)
+    flash("Job deleted ✔", "success")
+    return redirect("/jobs")
+
+
+@app.post("/jobs/run-now")
+def jobs_run_now():
+    job_id = (request.form.get("job_id") or "").strip()
+    if not job_id:
+        flash("Missing job id.", "error")
+        return redirect("/jobs")
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    (CONFIG_DIR / f"run_now_{job_id}.flag").write_text(now_iso(), encoding="utf-8")
+    flash("Run Now triggered ✔ (check logs/dashboard)", "success")
+    return redirect("/dashboard")
 
 
 @app.post("/apply-cron")
@@ -1393,6 +1668,37 @@ def preview():
               </tr>
             """
 
+        if job["DRY_RUN"]:
+            run_now_html = f"""
+              <form method="post" action="/jobs/run-now" style="margin:0;">
+                <input type="hidden" name="job_id" value="{safe_html(job["id"])}">
+                <button class="btn good" type="submit">Run Now</button>
+              </form>
+            """
+        else:
+            run_now_html = f"""
+              <button class="btn bad" type="button" onclick="openRunNowConfirm('{safe_html(job["id"])}')">Run Now</button>
+            """
+
+        run_confirm_modal = """
+        <div class="modalBack" id="runNowBack">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="runNowTitle">
+            <div class="mh"><h3 id="runNowTitle">Run Now confirmation</h3></div>
+            <div class="mb">
+              <p><b>Dry Run is OFF.</b> This job may delete movie files via Radarr.</p>
+              <p class="muted">If you’re not sure, edit the job and enable <b>Dry Run</b>, then use Preview.</p>
+            </div>
+            <div class="mf">
+              <button class="btn" type="button" onclick="hideModal('runNowBack')">Cancel</button>
+              <form id="runNowFormConfirm" method="post" action="/jobs/run-now" style="margin:0;">
+                <input type="hidden" id="runNowJobId" name="job_id" value="">
+                <button class="btn bad" type="button" onclick="runNowSubmitConfirm()">Yes, run now</button>
+              </form>
+            </div>
+          </div>
+        </div>
+        """
+
         body = f"""
           <div class="grid">
             <div class="card">
@@ -1400,6 +1706,7 @@ def preview():
                 <h2>Preview candidates</h2>
                 <div class="btnrow">
                   <a class="btn" href="/jobs">Back to Jobs</a>
+                  {run_now_html}
                 </div>
               </div>
               <div class="bd">
@@ -1428,6 +1735,7 @@ def preview():
               </div>
             </div>
           </div>
+          {run_confirm_modal}
         """
         return render_template_string(shell("mediareaparr • Preview", "jobs", body))
 
