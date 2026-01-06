@@ -145,9 +145,12 @@ def load_config() -> Dict[str, Any]:
     cfg = {
         "RADARR_URL": env_default("RADARR_URL", "http://radarr:7878").rstrip("/"),
         "RADARR_API_KEY": env_default("RADARR_API_KEY", ""),
+        "SONARR_URL": env_default("SONARR_URL", "http://sonarr:8989").rstrip("/"),
+        "SONARR_API_KEY": env_default("SONARR_API_KEY", ""),
         "HTTP_TIMEOUT_SECONDS": int(env_default("HTTP_TIMEOUT_SECONDS", "30")),
         "UI_THEME": env_default("UI_THEME", "dark"),
         "RADARR_OK": False,
+        "SONARR_OK": False,
         "JOBS": [],
     }
 
@@ -163,6 +166,7 @@ def load_config() -> Dict[str, Any]:
     t = (cfg.get("UI_THEME") or "dark").lower()
     cfg["UI_THEME"] = t if t in ("dark", "light") else "dark"
     cfg["RADARR_OK"] = bool(cfg.get("RADARR_OK", False))
+    cfg["SONARR_OK"] = bool(cfg.get("SONARR_OK", False))
     cfg["HTTP_TIMEOUT_SECONDS"] = clamp_int(cfg.get("HTTP_TIMEOUT_SECONDS", 30), 5, 300, 30)
 
     jobs = cfg.get("JOBS") or []
@@ -178,6 +182,8 @@ def load_config() -> Dict[str, Any]:
     cfg["JOBS"] = jobs
     cfg["RADARR_URL"] = (cfg.get("RADARR_URL") or "").rstrip("/")
     cfg["RADARR_API_KEY"] = cfg.get("RADARR_API_KEY") or ""
+    cfg["SONARR_URL"] = (cfg.get("SONARR_URL") or "").rstrip("/")
+    cfg["SONARR_API_KEY"] = cfg.get("SONARR_API_KEY") or ""
     return cfg
 
 
@@ -226,6 +232,20 @@ def radarr_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
 def radarr_get(cfg: Dict[str, Any], path: str):
     url = cfg["RADARR_URL"].rstrip("/") + path
     r = requests.get(url, headers=radarr_headers(cfg), timeout=int(cfg.get("HTTP_TIMEOUT_SECONDS", 30)))
+    r.raise_for_status()
+    return r.json()
+
+
+# --------------------------
+# Sonarr helpers (for Settings test only)
+# --------------------------
+def sonarr_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
+    return {"X-Api-Key": cfg.get("SONARR_API_KEY", "")}
+
+
+def sonarr_get(cfg: Dict[str, Any], path: str):
+    url = cfg["SONARR_URL"].rstrip("/") + path
+    r = requests.get(url, headers=sonarr_headers(cfg), timeout=int(cfg.get("HTTP_TIMEOUT_SECONDS", 30)))
     r.raise_for_status()
     return r.json()
 
@@ -488,7 +508,7 @@ BASE_HEAD = """
     border-radius: 14px;
     padding: 10px 12px;
     background: rgba(0,0,0,.18);
-    position: relative; /* for select arrow */
+    position: relative;
   }
   [data-theme="light"] .field{ background: rgba(0,0,0,.03); }
 
@@ -505,17 +525,15 @@ BASE_HEAD = """
   }
   [data-theme="light"] .field input, [data-theme="light"] .field select{ background: rgba(0,0,0,.02); }
 
-  /* ===== Dropdown (select) dark-theme fixes ===== */
   .field select{
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
 
     background: rgba(255,255,255,.06);
-    padding-right: 36px; /* space for arrow */
+    padding-right: 36px;
     cursor: pointer;
 
-    /* custom arrow (no extra markup needed) */
     background-image:
       linear-gradient(45deg, transparent 50%, var(--muted) 50%),
       linear-gradient(135deg, var(--muted) 50%, transparent 50%);
@@ -556,7 +574,6 @@ BASE_HEAD = """
   [data-theme="light"] .check{ background: rgba(0,0,0,.03); }
   .check input{ transform: scale(1.2); }
 
-  /* Jobs cards */
   .jobsGrid{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
   .jobCard{
     grid-column: span 12;
@@ -601,7 +618,6 @@ BASE_HEAD = """
   tr:hover td{ background: rgba(255,255,255,.02); }
   .tablewrap{ max-height: 420px; overflow:auto; border-radius: 14px; border: 1px solid var(--line); }
 
-  /* Modal */
   .modalBack{
     position: fixed; inset: 0;
     background: rgba(0,0,0,.72);
@@ -642,7 +658,6 @@ BASE_HEAD = """
   }
   [data-theme="light"] .modal .mf{ background: rgba(0,0,0,.02); }
 
-  /* Toasts */
   .toastHost{
     position: fixed;
     right: 16px;
@@ -684,12 +699,9 @@ BASE_HEAD = """
     if (back) back.style.display = "none";
   }
 
-  // Job modal should only close via Cancel/Save redirect:
-  // - no ESC close for jobBack
-  // - no backdrop click close
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      hideModal("runNowBack"); // only this one
+      hideModal("runNowBack");
     }
   });
 
@@ -796,12 +808,20 @@ BASE_HEAD = """
     if (!settingsForm || !saveBtn) return;
 
     const radarrOk = settingsForm.getAttribute("data-radarr-ok") === "1";
+    const sonarrOk = settingsForm.getAttribute("data-sonarr-ok") === "1";
+
     const dirty = isDirty(settingsForm);
 
-    saveBtn.disabled = !(radarrOk && dirty);
-    saveBtn.title = !radarrOk
-      ? "Test Radarr connection first"
-      : (dirty ? "Save settings" : "No changes to save");
+    // Sonarr is optional: require "Connected" only if URL or API key has been entered
+    const sonarrUrl = (document.querySelector('input[name="SONARR_URL"]')?.value || "").trim();
+    const sonarrKey = (document.querySelector('input[name="SONARR_API_KEY"]')?.value || "").trim();
+    const sonarrConfigured = !!(sonarrUrl || sonarrKey);
+    const sonarrReady = !sonarrConfigured || sonarrOk;
+
+    saveBtn.disabled = !(radarrOk && sonarrReady && dirty);
+    if (!radarrOk) saveBtn.title = "Test Radarr connection first";
+    else if (!sonarrReady) saveBtn.title = "Test Sonarr connection first (or clear Sonarr fields)";
+    else saveBtn.title = dirty ? "Save settings" : "No changes to save";
   }
 
   function onSettingsEdited(e) {
@@ -810,11 +830,20 @@ BASE_HEAD = """
 
     if (e.target && (e.target.name === "RADARR_URL" || e.target.name === "RADARR_API_KEY")) {
       settingsForm.setAttribute("data-radarr-ok", "0");
-
       const testBtn = document.getElementById("testRadarrBtn");
       if (testBtn) {
         testBtn.disabled = false;
         testBtn.title = "Test Radarr connection";
+        testBtn.textContent = "Test Connection";
+      }
+    }
+
+    if (e.target && (e.target.name === "SONARR_URL" || e.target.name === "SONARR_API_KEY")) {
+      settingsForm.setAttribute("data-sonarr-ok", "0");
+      const testBtn = document.getElementById("testSonarrBtn");
+      if (testBtn) {
+        testBtn.disabled = false;
+        testBtn.title = "Test Sonarr connection";
         testBtn.textContent = "Test Connection";
       }
     }
@@ -1027,14 +1056,63 @@ def test_radarr():
     return redirect("/settings")
 
 
+@app.post("/test-sonarr")
+def test_sonarr():
+    cfg = load_config()
+
+    url = (request.form.get("SONARR_URL") or cfg.get("SONARR_URL") or "").rstrip("/")
+    api_key = request.form.get("SONARR_API_KEY") or cfg.get("SONARR_API_KEY") or ""
+
+    cfg["SONARR_OK"] = False
+    save_config(cfg)
+
+    if not url:
+        flash("Sonarr URL is empty.", "error")
+        return redirect("/settings")
+    if not api_key:
+        flash("Sonarr API Key is empty.", "error")
+        return redirect("/settings")
+
+    try:
+        r = requests.get(
+            url + "/api/v3/system/status",
+            headers={"X-Api-Key": api_key},
+            timeout=int(cfg.get("HTTP_TIMEOUT_SECONDS", 30)),
+        )
+        if r.status_code in (401, 403):
+            flash("Sonarr connection failed: Unauthorized (API key incorrect).", "error")
+            return redirect("/settings")
+
+        r.raise_for_status()
+
+        cfg["SONARR_OK"] = True
+        save_config(cfg)
+        return redirect("/settings")
+
+    except requests.exceptions.ConnectTimeout:
+        flash("Sonarr connection failed: timeout connecting to the host.", "error")
+    except requests.exceptions.ConnectionError:
+        flash("Sonarr connection failed: could not connect (URL/host/network).", "error")
+    except Exception as e:
+        flash(f"Sonarr connection failed: {e}", "error")
+
+    return redirect("/settings")
+
+
 @app.get("/settings")
 def settings():
     cfg = load_config()
 
     radarr_ok = bool(cfg.get("RADARR_OK"))
+    sonarr_ok = bool(cfg.get("SONARR_OK"))
+
     test_label = "Connected" if radarr_ok else "Test Connection"
     test_disabled_attr = "disabled" if radarr_ok else ""
     test_title = "Radarr connection is OK" if radarr_ok else "Test Radarr connection"
+
+    sonarr_test_label = "Connected" if sonarr_ok else "Test Connection"
+    sonarr_test_disabled_attr = "disabled" if sonarr_ok else ""
+    sonarr_test_title = "Sonarr connection is OK" if sonarr_ok else "Test Sonarr connection"
 
     body = f"""
       <div class="grid">
@@ -1054,6 +1132,7 @@ def settings():
                   method="post"
                   action="/save-settings"
                   data-radarr-ok="{ '1' if radarr_ok else '0' }"
+                  data-sonarr-ok="{ '1' if sonarr_ok else '0' }"
                   style="margin:0;">
 
               <div class="card" style="box-shadow:none; margin-bottom:14px;">
@@ -1082,6 +1161,40 @@ def settings():
                             formmethod="post"
                             {test_disabled_attr}
                             title="{safe_html(test_title)}">{safe_html(test_label)}</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card" style="box-shadow:none; margin-bottom:14px;">
+                <div class="hd">
+                  <h2>Sonarr setup</h2>
+                  <div class="muted">Optional</div>
+                </div>
+                <div class="bd">
+                  <div class="form">
+                    <div class="field">
+                      <label>Sonarr URL</label>
+                      <input type="text" name="SONARR_URL"
+                             value="{safe_html(cfg["SONARR_URL"])}"
+                             data-initial="{safe_html(cfg["SONARR_URL"])}">
+                    </div>
+                    <div class="field">
+                      <label>Sonarr API Key</label>
+                      <input type="password" name="SONARR_API_KEY"
+                             value="{safe_html(cfg["SONARR_API_KEY"])}"
+                             data-initial="{safe_html(cfg["SONARR_API_KEY"])}">
+                    </div>
+                  </div>
+
+                  <div class="btnrow" style="margin-top:14px;">
+                    <button id="testSonarrBtn"
+                            class="btn good"
+                            type="submit"
+                            formaction="/test-sonarr"
+                            formmethod="post"
+                            {sonarr_test_disabled_attr}
+                            title="{safe_html(sonarr_test_title)}">{safe_html(sonarr_test_label)}</button>
+                    <div class="muted">Leave blank if you don’t use Sonarr.</div>
                   </div>
                 </div>
               </div>
@@ -1130,16 +1243,31 @@ def save_settings():
 
     cfg["RADARR_URL"] = (request.form.get("RADARR_URL") or "").rstrip("/")
     cfg["RADARR_API_KEY"] = request.form.get("RADARR_API_KEY") or ""
+
+    cfg["SONARR_URL"] = (request.form.get("SONARR_URL") or "").rstrip("/")
+    cfg["SONARR_API_KEY"] = request.form.get("SONARR_API_KEY") or ""
+
     cfg["HTTP_TIMEOUT_SECONDS"] = clamp_int(request.form.get("HTTP_TIMEOUT_SECONDS") or 30, 5, 300, 30)
     cfg["UI_THEME"] = (request.form.get("UI_THEME") or cfg.get("UI_THEME", "dark")).lower()
     if cfg["UI_THEME"] not in ("dark", "light"):
         cfg["UI_THEME"] = "dark"
 
+    # Reset OK flags if credentials changed
     if old.get("RADARR_URL") != cfg["RADARR_URL"] or old.get("RADARR_API_KEY") != cfg["RADARR_API_KEY"]:
         cfg["RADARR_OK"] = False
+    if old.get("SONARR_URL") != cfg["SONARR_URL"] or old.get("SONARR_API_KEY") != cfg["SONARR_API_KEY"]:
+        cfg["SONARR_OK"] = False
 
+    # Radarr is required for this app
     if not cfg.get("RADARR_OK", False):
-        flash("Please click Test Connection and make sure it shows Connected before saving.", "error")
+        flash("Please click Test Connection for Radarr and make sure it shows Connected before saving.", "error")
+        save_config(cfg)
+        return redirect("/settings")
+
+    # Sonarr optional: only require "Connected" if configured
+    sonarr_configured = bool((cfg.get("SONARR_URL") or "").strip() or (cfg.get("SONARR_API_KEY") or "").strip())
+    if sonarr_configured and not cfg.get("SONARR_OK", False):
+        flash("Please click Test Connection for Sonarr (or clear Sonarr fields) before saving.", "error")
         save_config(cfg)
         return redirect("/settings")
 
