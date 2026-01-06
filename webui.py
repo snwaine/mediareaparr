@@ -112,11 +112,11 @@ SONARR_DELETE_MODES = [
 def sonarr_delete_mode_label(mode: str) -> str:
     mode = (mode or "").strip()
     if mode == "episodes_only":
-        return "Episodes only (keep series in Sonarr)"
+        return "Episodes only (keep Series in Sonarr)"
     if mode == "episodes_then_series_if_empty":
-        return "Episodes, Series only if empty (remove series from Sonarr)"
+        return "Episodes, Series only if empty (remove Series from Sonarr)"
     if mode == "series_whole":
-        return "Whole series (remove from Sonarr)"
+        return "Whole Series (remove from Sonarr)"
     return mode or "episodes_only"
 
 
@@ -1759,9 +1759,9 @@ def jobs_page():
               <div class="field" id="sonarrDeleteModeField" style="display:none;">
                 <label>Sonarr Delete Mode</label>
                 <select name="SONARR_DELETE_MODE" id="job_sonarr_mode">
-                  <option value="episodes_only">Episodes only (keep series in Sonarr)</option>
-                  <option value="episodes_then_series_if_empty">Episodes, Series only if empty (remove series from Sonarr)</option>
-                  <option value="series_whole">Whole series (remove from Sonarr)</option>
+                  <option value="episodes_only">Episodes only (keep Series in Sonarr)</option>
+                  <option value="episodes_then_series_if_empty">Episodes, Series only if empty (remove Series from Sonarr)</option>
+                  <option value="series_whole">Whole Series (remove from Sonarr)</option>
                 </select>
               </div>
 
