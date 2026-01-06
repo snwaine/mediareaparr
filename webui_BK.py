@@ -102,6 +102,24 @@ def schedule_label(day_key: str, hour: int) -> str:
     return f"{day_txt} • {h:02d}:00"
 
 
+SONARR_DELETE_MODES = [
+    "episodes_only",
+    "episodes_then_series_if_empty",
+    "series_whole",
+]
+
+
+def sonarr_delete_mode_label(mode: str) -> str:
+    mode = (mode or "").strip()
+    if mode == "episodes_only":
+        return "Delete only episode files older than X days inside tagged series (keep series in Sonarr)"
+    if mode == "episodes_then_series_if_empty":
+        return "Delete episodes first; delete series only if no files remain in tagged series (remove series from Sonarr)"
+    if mode == "series_whole":
+        return "Delete whole series when older than X days in tagged (remove series from Sonarr)"
+    return mode or "episodes_only"
+
+
 def job_defaults() -> Dict[str, Any]:
     return {
         "id": make_job_id(),
@@ -115,12 +133,15 @@ def job_defaults() -> Dict[str, Any]:
         "DRY_RUN": True,
         "DELETE_FILES": True,
         "ADD_IMPORT_EXCLUSION": False,
+        # Sonarr-specific:
+        "SONARR_DELETE_MODE": "episodes_only",
     }
 
 
 def normalize_job(j: Dict[str, Any]) -> Dict[str, Any]:
     d = job_defaults()
     d.update(j or {})
+
     d["id"] = str(d.get("id") or make_job_id())
     d["name"] = str(d.get("name") or "Job").strip()[:60] or "Job"
     d["enabled"] = bool(d.get("enabled", True))
@@ -140,6 +161,12 @@ def normalize_job(j: Dict[str, Any]) -> Dict[str, Any]:
     d["DRY_RUN"] = bool(d.get("DRY_RUN", True))
     d["DELETE_FILES"] = bool(d.get("DELETE_FILES", True))
     d["ADD_IMPORT_EXCLUSION"] = bool(d.get("ADD_IMPORT_EXCLUSION", False))
+
+    mode = str(d.get("SONARR_DELETE_MODE") or "episodes_only").strip()
+    if mode not in SONARR_DELETE_MODES:
+        mode = "episodes_only"
+    d["SONARR_DELETE_MODE"] = mode
+
     return d
 
 
@@ -797,6 +824,7 @@ BASE_HEAD = """
     max-height: calc(100vh - 40px);
     display:flex;
     flex-direction: column;
+    min-height: 0;
   }
   .modal .mh{
     padding: 14px 16px;
@@ -810,11 +838,22 @@ BASE_HEAD = """
   }
   [data-theme="light"] .modal .mh{ background: #f3f4f6; }
   .modal .mh h3{ margin:0; font-size: 14px; letter-spacing: .2px; }
+
+  /* ✅ CRITICAL FIX: form must be flex column for footer to stay visible and body to scroll */
+  .modal form{
+    display:flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
   .modal .mb{
     padding: 14px 16px;
     background: var(--panel);
     overflow: auto;               /* scrollable content */
     flex: 1 1 auto;
+    min-height: 0;                /* critical for nested scrolling */
+    -webkit-overflow-scrolling: touch;
   }
   .modal .mf{
     padding: 14px 16px;
@@ -825,33 +864,8 @@ BASE_HEAD = """
     background: var(--panel2);
     flex: 0 0 auto;
   }
-    /* FIX: make the modal form a flex column so footer stays visible */
-  .modal form{
-    display: flex;
-    flex-direction: column;
-    flex: 1 1 auto;
-    min-height: 0; /* critical for scroll containers inside flex */
-  }
-
-  .modal form .mb{
-    flex: 1 1 auto;
-    min-height: 0; /* critical */
-    overflow: auto;
-    padding-bottom: 90px; /* prevents content hiding behind footer */
-  }
-
-  .modal form .mf{
-    box-shadow: 0 -10px 18px rgba(0,0,0,.22);
-    flex: 0 0 auto;
-    position: sticky;
-    bottom: 0;
-    z-index: 2;
-  }
-
   [data-theme="light"] .modal .mf{ background: #f3f4f6; }
-  [data-theme="light"] .modal form .mf{ box-shadow: 0 -10px 18px rgba(0,0,0,.08);
 
-}
   /* Toasts */
   .toastHost{
     position: fixed;
@@ -949,10 +963,20 @@ BASE_HEAD = """
     }
   }
 
+  function updateSonarrModeVisibility(appKey) {
+    const wrap = document.getElementById("sonarrDeleteModeField");
+    const sel = document.getElementById("job_sonarr_mode");
+    const isSonarr = (appKey || "radarr") === "sonarr";
+
+    if (wrap) wrap.style.display = isSonarr ? "" : "none";
+    if (sel) sel.disabled = !isSonarr;  // don't submit when not Sonarr
+  }
+
   function onJobAppChanged() {
     const appSel = document.getElementById("job_app");
     const appKey = appSel ? (appSel.value || "radarr") : "radarr";
     rebuildTagOptions(appKey, "");
+    updateSonarrModeVisibility(appKey);
   }
 
   function openNewJob() {
@@ -967,6 +991,10 @@ BASE_HEAD = """
     const defApp = appSel?.getAttribute("data-default-app") || "radarr";
     setVal("job_app", defApp);
     rebuildTagOptions(defApp, "");
+    updateSonarrModeVisibility(defApp);
+
+    // Sonarr mode default
+    setVal("job_sonarr_mode", "episodes_only");
 
     setVal("job_days", "30");
     setVal("job_day", "daily");
@@ -996,6 +1024,10 @@ BASE_HEAD = """
 
     const tag = btn.getAttribute("data-tag") || "";
     rebuildTagOptions(appKey, tag);
+    updateSonarrModeVisibility(appKey);
+
+    const smode = btn.getAttribute("data-sonarr-mode") || "episodes_only";
+    setVal("job_sonarr_mode", smode);
 
     setVal("job_days", btn.getAttribute("data-days") || "30");
     setVal("job_day", btn.getAttribute("data-day") || "daily");
@@ -1012,11 +1044,46 @@ BASE_HEAD = """
     showModal("jobBack");
   }
 
-  function openRunNowConfirm(jobId) {
+  // ✅ Dynamic Run Now confirmation
+  function openRunNowConfirm(jobId, opts) {
+    opts = opts || {};
+    const app = (opts.app || "radarr").toLowerCase();
+    const dryRun = !!opts.dryRun;
+    const deleteFiles = !!opts.deleteFiles;
+    const enabled = (opts.enabled === undefined) ? true : !!opts.enabled;
+
     const hid = document.getElementById("runNowJobId");
     if (hid) hid.value = jobId || "";
+
+    const elApp = document.getElementById("rn_app");
+    const elDry = document.getElementById("rn_dry");
+    const elDel = document.getElementById("rn_del");
+    const elEnabled = document.getElementById("rn_enabled");
+
+    if (elApp) elApp.textContent = (app === "sonarr") ? "Sonarr" : "Radarr";
+    if (elDry) elDry.textContent = dryRun ? "ON" : "OFF";
+    if (elDel) elDel.textContent = deleteFiles ? "ON" : "OFF";
+    if (elEnabled) elEnabled.textContent = enabled ? "Enabled" : "Disabled";
+
+    const msg = document.getElementById("rn_msg");
+    if (msg) {
+      const parts = [];
+      if (!enabled) parts.push("This job is currently disabled — running now will still execute it.");
+      if (!dryRun) parts.push("Dry Run is OFF — this will perform real actions.");
+      if (deleteFiles) parts.push("Delete Files is ON — files may be removed from disk.");
+      else parts.push("Delete Files is OFF — it should avoid disk deletes.");
+
+      msg.textContent = parts.join(" ");
+    }
+
+    const hintDelete = document.getElementById("rn_hint_delete");
+    const hintNoDelete = document.getElementById("rn_hint_no_delete");
+    if (hintDelete) hintDelete.style.display = deleteFiles ? "" : "none";
+    if (hintNoDelete) hintNoDelete.style.display = deleteFiles ? "none" : "";
+
     showModal("runNowBack");
   }
+
   function runNowSubmitConfirm() {
     const form = document.getElementById("runNowFormConfirm");
     if (form) form.submit();
@@ -1122,6 +1189,7 @@ BASE_HEAD = """
       const enabled = params.get("enabled") || "1";
       const appKey = (params.get("APP") || "radarr");
       const tag = params.get("TAG_LABEL") || "";
+      const smode = params.get("SONARR_DELETE_MODE") || "episodes_only";
       const days = params.get("DAYS_OLD") || "30";
       const day = params.get("SCHED_DAY") || "daily";
       const hour = params.get("SCHED_HOUR") || "3";
@@ -1138,6 +1206,8 @@ BASE_HEAD = """
 
       const tagDecoded = decodeURIComponent(tag || "");
       rebuildTagOptions(appKey, tagDecoded);
+      updateSonarrModeVisibility(appKey);
+      setVal("job_sonarr_mode", decodeURIComponent(smode || "episodes_only"));
 
       setVal("job_days", days);
       setVal("job_day", day);
@@ -1150,6 +1220,10 @@ BASE_HEAD = """
       setVal("job_enabled", enabled);
 
       showModal("jobBack");
+    } else {
+      const appSel = document.getElementById("job_app");
+      const appKey = appSel ? (appSel.value || "radarr") : "radarr";
+      updateSonarrModeVisibility(appKey);
     }
   });
 </script>
@@ -1681,6 +1755,16 @@ def jobs_page():
                 <input type="number" min="1" name="DAYS_OLD" id="job_days" value="30" required>
               </div>
 
+              <!-- Sonarr-only delete mode -->
+              <div class="field" id="sonarrDeleteModeField" style="display:none;">
+                <label>Sonarr Delete Mode</label>
+                <select name="SONARR_DELETE_MODE" id="job_sonarr_mode">
+                  <option value="episodes_only">Delete only episode files older than X days inside tagged series (keep series in Sonarr)</option>
+                  <option value="episodes_then_series_if_empty">Delete episodes first; delete series only if no files remain in tagged series (remove series from Sonarr)</option>
+                  <option value="series_whole">Delete whole series when older than X days in tagged (remove series from Sonarr)</option>
+                </select>
+              </div>
+
               <div class="field">
                 <label>Scheduler Day</label>
                 <select name="SCHED_DAY" id="job_day">
@@ -1748,6 +1832,7 @@ def jobs_page():
     </div>
     """
 
+    # ✅ Dynamic modal content placeholders
     run_confirm_modal = """
     <div class="modalBack" id="runNowBack">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="runNowTitle">
@@ -1755,8 +1840,21 @@ def jobs_page():
           <h3 id="runNowTitle">Run Now confirmation</h3>
         </div>
         <div class="mb">
-          <p><b>Dry Run is OFF.</b> This job will perform real actions.</p>
-          <p class="muted">If <b>Delete Files</b> is enabled, it may delete files via Radarr/Sonarr.</p>
+          <div style="margin-bottom:10px;">
+            <div class="muted">App: <b><span id="rn_app">Radarr</span></b></div>
+            <div class="muted">Dry Run: <b><span id="rn_dry">OFF</span></b> • Delete Files: <b><span id="rn_del">ON</span></b> • Job: <b><span id="rn_enabled">Enabled</span></b></div>
+          </div>
+
+          <p><b id="rn_msg">Dry Run is OFF — this will perform real actions.</b></p>
+
+          <p id="rn_hint_delete" class="muted">
+            With <b>Delete Files</b> enabled, it may delete files from disk via the app.
+          </p>
+
+          <p id="rn_hint_no_delete" class="muted" style="display:none;">
+            With <b>Delete Files</b> disabled, it should avoid deleting from disk.
+          </p>
+
           <p class="muted">If you’re not sure, edit the job and enable <b>Dry Run</b>, then use Preview.</p>
         </div>
         <div class="mf">
@@ -1781,6 +1879,10 @@ def jobs_page():
         app_key = (j.get("APP") or "radarr").lower()
         app_label = "Radarr" if app_key == "radarr" else "Sonarr"
 
+        sonarr_mode_line = ""
+        if app_key == "sonarr":
+            sonarr_mode_line = f"<br>Sonarr mode: <b>{safe_html(sonarr_delete_mode_label(j.get('SONARR_DELETE_MODE')))}</b>"
+
         if j["DRY_RUN"]:
             run_now_html = f"""
               <form method="post" action="/jobs/run-now" style="margin:0;">
@@ -1790,7 +1892,13 @@ def jobs_page():
             """
         else:
             run_now_html = f"""
-              <button class="btn bad" type="button" onclick="openRunNowConfirm('{safe_html(j["id"])}')">Run Now</button>
+              <button class="btn bad" type="button"
+                onclick="openRunNowConfirm('{safe_html(j["id"])}', {{
+                  app: '{safe_html(app_key)}',
+                  dryRun: false,
+                  deleteFiles: {str(bool(j["DELETE_FILES"])).lower()},
+                  enabled: {str(bool(j["enabled"])).lower()}
+                }})">Run Now</button>
             """
 
         job_cards.append(f"""
@@ -1799,7 +1907,8 @@ def jobs_page():
               <div>
                 <div class="jobName">{safe_html(j["name"])}</div>
                 <div class="jobMeta">
-                  App: <b>{safe_html(app_label)}</b> • Tag: <code>{safe_html(j["TAG_LABEL"])}</code> • Older than <code>{j["DAYS_OLD"]}</code> days<br>
+                  App: <b>{safe_html(app_label)}</b> • Tag: <code>{safe_html(j["TAG_LABEL"])}</code> • Older than <code>{j["DAYS_OLD"]}</code> days
+                  {sonarr_mode_line}<br>
                   Schedule: <b>{safe_html(sched)}</b> • Dry-run: <b>{dry}</b> • Delete files: <b>{delete_files}</b>
                 </div>
               </div>
@@ -1824,6 +1933,7 @@ def jobs_page():
                         data-enabled="{ '1' if j["enabled"] else '0' }"
                         data-app="{safe_html(app_key)}"
                         data-tag="{safe_html(j["TAG_LABEL"])}"
+                        data-sonarr-mode="{safe_html(j.get("SONARR_DELETE_MODE","episodes_only"))}"
                         data-days="{j["DAYS_OLD"]}"
                         data-day="{safe_html(j["SCHED_DAY"])}"
                         data-hour="{j["SCHED_HOUR"]}"
@@ -1914,6 +2024,13 @@ def jobs_save():
         if not tag_label:
             raise ValueError("Please select a tag.")
 
+        sonarr_mode = (request.form.get("SONARR_DELETE_MODE") or "episodes_only").strip()
+        if sonarr_mode not in SONARR_DELETE_MODES:
+            sonarr_mode = "episodes_only"
+        if app_key != "sonarr":
+            # keep a stable value but it won't be used
+            sonarr_mode = "episodes_only"
+
         job = {
             "id": job_id or make_job_id(),
             "name": name,
@@ -1921,6 +2038,7 @@ def jobs_save():
             "APP": app_key,
             "TAG_LABEL": tag_label,
             "DAYS_OLD": clamp_int(request.form.get("DAYS_OLD") or 30, 1, 36500, 30),
+            "SONARR_DELETE_MODE": sonarr_mode,
             "SCHED_DAY": (request.form.get("SCHED_DAY") or "daily").lower(),
             "SCHED_HOUR": clamp_int(request.form.get("SCHED_HOUR") or 3, 0, 23, 3),
             "DRY_RUN": checkbox("DRY_RUN"),
@@ -1955,6 +2073,7 @@ def jobs_save():
             "name": request.form.get("name", ""),
             "enabled": request.form.get("enabled", "1"),
             "TAG_LABEL": request.form.get("TAG_LABEL", ""),
+            "SONARR_DELETE_MODE": request.form.get("SONARR_DELETE_MODE", "episodes_only"),
             "DAYS_OLD": request.form.get("DAYS_OLD", ""),
             "SCHED_DAY": request.form.get("SCHED_DAY", ""),
             "SCHED_HOUR": request.form.get("SCHED_HOUR", ""),
@@ -2069,16 +2188,36 @@ def preview():
             """
         else:
             run_now_html = f"""
-              <button class="btn bad" type="button" onclick="openRunNowConfirm('{safe_html(job["id"])}')">Run Now</button>
+              <button class="btn bad" type="button"
+                onclick="openRunNowConfirm('{safe_html(job["id"])}', {{
+                  app: '{safe_html(job.get("APP","radarr"))}',
+                  dryRun: false,
+                  deleteFiles: {str(bool(job.get("DELETE_FILES", True))).lower()},
+                  enabled: {str(bool(job.get("enabled", True))).lower()}
+                }})">Run Now</button>
             """
 
+        # ✅ Same dynamic modal as Jobs page
         run_confirm_modal = """
         <div class="modalBack" id="runNowBack">
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="runNowTitle">
             <div class="mh"><h3 id="runNowTitle">Run Now confirmation</h3></div>
             <div class="mb">
-              <p><b>Dry Run is OFF.</b> This job will perform real actions.</p>
-              <p class="muted">If <b>Delete Files</b> is enabled, it may delete files via Radarr/Sonarr.</p>
+              <div style="margin-bottom:10px;">
+                <div class="muted">App: <b><span id="rn_app">Radarr</span></b></div>
+                <div class="muted">Dry Run: <b><span id="rn_dry">OFF</span></b> • Delete Files: <b><span id="rn_del">ON</span></b> • Job: <b><span id="rn_enabled">Enabled</span></b></div>
+              </div>
+
+              <p><b id="rn_msg">Dry Run is OFF — this will perform real actions.</b></p>
+
+              <p id="rn_hint_delete" class="muted">
+                With <b>Delete Files</b> enabled, it may delete files from disk via the app.
+              </p>
+
+              <p id="rn_hint_no_delete" class="muted" style="display:none;">
+                With <b>Delete Files</b> disabled, it should avoid deleting from disk.
+              </p>
+
               <p class="muted">If you’re not sure, edit the job and enable <b>Dry Run</b>, then use Preview.</p>
             </div>
             <div class="mf">
@@ -2093,6 +2232,9 @@ def preview():
         """
 
         app_label = "Sonarr" if job.get("APP") == "sonarr" else "Radarr"
+        sonarr_mode_line = ""
+        if job.get("APP") == "sonarr":
+            sonarr_mode_line = f" • Mode: <b>{safe_html(sonarr_delete_mode_label(job.get('SONARR_DELETE_MODE')))}</b>"
 
         body = f"""
           <div class="grid">
@@ -2106,7 +2248,7 @@ def preview():
               </div>
               <div class="bd">
                 <div class="muted">
-                  App: <b>{safe_html(app_label)}</b> • Job: <b>{safe_html(job["name"])}</b> • Tag <code>{safe_html(job["TAG_LABEL"])}</code> • Older than <code>{job["DAYS_OLD"]}</code> days
+                  App: <b>{safe_html(app_label)}</b>{sonarr_mode_line} • Job: <b>{safe_html(job["name"])}</b> • Tag <code>{safe_html(job["TAG_LABEL"])}</code> • Older than <code>{job["DAYS_OLD"]}</code> days
                 </div>
                 <div class="muted" style="margin-top:6px;">Found <b>{len(candidates)}</b> candidate(s). Preview only (no deletes).</div>
                 <div class="muted" style="margin-top:6px;">Cutoff: <code>{safe_html(cutoff)}</code></div>

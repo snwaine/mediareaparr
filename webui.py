@@ -112,11 +112,11 @@ SONARR_DELETE_MODES = [
 def sonarr_delete_mode_label(mode: str) -> str:
     mode = (mode or "").strip()
     if mode == "episodes_only":
-        return "Delete only episode files older than X days inside tagged series (keep series in Sonarr)"
+        return "Episodes only (keep series in Sonarr)"
     if mode == "episodes_then_series_if_empty":
-        return "Delete episodes first; delete series only if no files remain in tagged series (remove series from Sonarr)"
+        return "Episodes, Series only if empty (remove series from Sonarr)"
     if mode == "series_whole":
-        return "Delete whole series when older than X days in tagged (remove series from Sonarr)"
+        return "Whole series (remove from Sonarr)"
     return mode or "episodes_only"
 
 
