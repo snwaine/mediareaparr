@@ -825,6 +825,28 @@ BASE_HEAD = """
     background: var(--panel2);
     flex: 0 0 auto;
   }
+    /* FIX: make the modal form a flex column so footer stays visible */
+  .modal form{
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0; /* critical for scroll containers inside flex */
+  }
+
+  .modal form .mb{
+    flex: 1 1 auto;
+    min-height: 0; /* critical */
+    overflow: auto;
+    padding-bottom: 90px; /* prevents content hiding behind footer */
+  }
+
+  .modal form .mf{
+    flex: 0 0 auto;
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+  }
+
   [data-theme="light"] .modal .mf{ background: #f3f4f6; }
 
   /* Toasts */
