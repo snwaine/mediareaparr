@@ -820,6 +820,21 @@ BASE_HEAD = """
     background: var(--panel2);
     overflow:hidden;
   }
+
+  /* Desktop: 2 jobs per row */
+  @media (min-width: 900px){
+    .jobCard{
+      grid-column: span 6;
+    }
+  }
+
+  /* Ultrawide: 3 jobs per row */
+  @media (min-width: 1400px){
+    .jobCard{
+      grid-column: span 4;
+    }
+  }
+
   [data-theme="light"] .jobCard{ background: #ffffff; }
   .jobTop{
     padding: 12px 12px;
@@ -2017,7 +2032,7 @@ def jobs_page():
               <div>
                 <div class="jobName">{safe_html(j["name"])}</div>
                 <div class="jobMeta">
-                  App: <b>{safe_html(app_label)}</b> • Tag: <code>{safe_html(j["TAG_LABEL"])}</code> • Older than <code>{j["DAYS_OLD"]}</code> days
+                  App: <b>{safe_html(app_label)}</b> • Tag: {safe_html(j["TAG_LABEL"])} • Older than {j["DAYS_OLD"]} days
                   {sonarr_mode_line}<br>
                   Schedule: <b>{safe_html(sched)}</b> • Dry-run: <b>{dry}</b> • Delete files: <b>{delete_files}</b>
                 </div>
@@ -2320,7 +2335,7 @@ def preview():
               </div>
               <div class="bd">
                 <div class="muted">
-                  App: <b>{safe_html(app_label)}</b>{sonarr_mode_line} • Job: <b>{safe_html(job["name"])}</b> • Tag <code>{safe_html(job["TAG_LABEL"])}</code> • Older than <code>{job["DAYS_OLD"]}</code> days
+                  App: <b>{safe_html(app_label)}</b>{sonarr_mode_line} • Job: <b>{safe_html(job["name"])}</b> • Tag {safe_html(job["TAG_LABEL"])} • Older than {job["DAYS_OLD"]} days
                 </div>
                 <div class="muted" style="margin-top:6px;">Found <b>{len(candidates)}</b> candidate(s). Preview only (no deletes).</div>
                 <div class="muted" style="margin-top:6px;">Cutoff: <code>{safe_html(cutoff)}</code></div>
