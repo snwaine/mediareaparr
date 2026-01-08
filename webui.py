@@ -118,19 +118,25 @@ def parse_iso_date(s: str):
         return None
 
 
+# --------------------------
+# Sonarr delete mode labels (single source of truth)
+# --------------------------
 SONARR_DELETE_MODES = [
     "episodes_only",
     "episodes_then_series_if_empty",
     "series_whole",
 ]
 
+SONARR_DELETE_MODE_LABELS = {
+    "episodes_only": "Episodes only",
+    "episodes_then_series_if_empty": "Episodes → remove empty series",
+    "series_whole": "Whole series",
+}
+
 
 def sonarr_delete_mode_label(mode: str) -> str:
-    return {
-        "episodes_only": "Episodes only",
-        "episodes_then_series_if_empty": "Episodes → Remove empty series",
-        "series_whole": "Whole series",
-    }.get(mode, "Episodes only")
+    mode = (mode or "").strip()
+    return SONARR_DELETE_MODE_LABELS.get(mode, SONARR_DELETE_MODE_LABELS["episodes_only"])
 
 
 def job_defaults() -> Dict[str, Any]:
@@ -1741,6 +1747,12 @@ def jobs_page():
     </script>
     """
 
+    # ✅ Options generated from the same label helper (consistent everywhere)
+    sonarr_mode_opts = "".join(
+        f'<option value="{safe_html(k)}">{safe_html(sonarr_delete_mode_label(k))}</option>'
+        for k in SONARR_DELETE_MODES
+    )
+
     job_modal = f"""
     <div class="modalBack" id="jobBack">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="jobTitle">
@@ -1782,9 +1794,7 @@ def jobs_page():
               <div class="field" id="sonarrDeleteModeField" style="display:none;">
                 <label>Sonarr Delete Mode</label>
                 <select name="SONARR_DELETE_MODE" id="job_sonarr_mode">
-                  <option value="episodes_only">Episodes only</option>
-                  <option value="episodes_then_series_if_empty">Episodes → remove empty series</option>
-                  <option value="series_whole">Whole series</option>
+                  {sonarr_mode_opts}
                 </select>
               </div>
 
@@ -2310,7 +2320,19 @@ def status():
         rows = []
         for k, v in d.items():
             if k == "JOBS":
-                rows.append(f"<tr><td><code>{safe_html(k)}</code></td><td class='muted'>[{len(v or [])} jobs]</td></tr>")
+                jobs = [normalize_job(x) for x in (v or [])]
+                parts = []
+                for j in jobs[:50]:
+                    app_key = (j.get("APP") or "radarr").lower()
+                    mode_txt = ""
+                    if app_key == "sonarr":
+                        mode_txt = f", mode={sonarr_delete_mode_label(j.get('SONARR_DELETE_MODE'))}"
+                    parts.append(f"{j.get('name','Job')} ({app_key}, tag={j.get('TAG_LABEL','')}{mode_txt})")
+                summary = "; ".join(parts) + (" …" if len(jobs) > 50 else "")
+                rows.append(
+                    f"<tr><td><code>{safe_html(k)}</code></td>"
+                    f"<td class='muted'>{safe_html(summary) if summary else safe_html(f'[{len(jobs)} jobs]')}</td></tr>"
+                )
             elif "API_KEY" in str(k).upper():
                 rows.append(f"<tr><td><code>{safe_html(k)}</code></td><td class='muted'>***</td></tr>")
             else:
