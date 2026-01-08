@@ -424,70 +424,6 @@ def render_toasts() -> str:
 
 
 # --------------------------
-# Shared modal HTML
-# --------------------------
-def run_now_modal_html() -> str:
-    return """
-    <div class="modalBack" id="runNowBack">
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="runNowTitle">
-        <div class="mh">
-          <h3 id="runNowTitle">Run Now confirmation</h3>
-        </div>
-
-        <div class="mb">
-          <div style="margin-bottom:10px;">
-            <div class="muted">App: <b><span id="rn_app">Radarr</span></b></div>
-
-            <div class="muted">
-              Dry Run: <b><span id="rn_dry">OFF</span></b>
-              • Delete Files: <b><span id="rn_del">ON</span></b>
-              • Import Exclusion: <b><span id="rn_excl">OFF</span></b>
-              • Job: <b><span id="rn_enabled">Enabled</span></b>
-            </div>
-
-            <div id="rn_son_mode_wrap" class="muted" style="margin-top:6px; display:none;">
-              Sonarr mode: <b><span id="rn_son_mode">Episodes only</span></b>
-            </div>
-          </div>
-
-          <p><b id="rn_msg">…</b></p>
-
-          <div style="margin-top:10px;">
-            <div style="font-weight:800; margin-bottom:6px;">What will happen</div>
-            <ul id="rn_steps" style="margin:0; padding-left:18px; line-height:1.5;">
-              <li class="muted">…</li>
-            </ul>
-          </div>
-
-          <p id="rn_hint_delete" class="muted" style="margin-top:10px;">
-            With <b>Delete Files</b> enabled, it may delete files from disk via the app.
-          </p>
-
-          <p id="rn_hint_no_delete" class="muted" style="display:none; margin-top:10px;">
-            With <b>Delete Files</b> disabled, it should avoid deleting from disk.
-          </p>
-
-          <p id="rn_hint_excl" class="muted" style="display:none; margin-top:10px;">
-            With <b>Add Import Exclusion</b> enabled, items may be prevented from re-importing.
-          </p>
-
-          <p class="muted" style="margin-top:10px;">If you’re not sure, enable <b>Dry Run</b> and use Preview first.</p>
-        </div>
-
-        <div class="mf">
-          <button class="btn" type="button" onclick="hideModal('runNowBack')">Cancel</button>
-
-          <form id="runNowFormConfirm" method="post" action="/jobs/run-now" style="margin:0;">
-            <input type="hidden" id="runNowJobId" name="job_id" value="">
-            <button id="rn_confirm_btn" class="btn bad" type="button" onclick="runNowSubmitConfirm()">Yes, run now</button>
-          </form>
-        </div>
-      </div>
-    </div>
-    """
-
-
-# --------------------------
 # UI (base styles + scripts)
 # --------------------------
 BASE_HEAD = """
@@ -804,6 +740,11 @@ BASE_HEAD = """
     background: rgba(255,255,255,.92);
   }
 
+  /* Small switch (job cards / preview header) */
+  .switch.sm{ width: 46px; height: 26px; }
+  .switch.sm .slider:before{ width: 18px; height: 18px; left: 4px; }
+  .switch.sm input:checked + .slider:before{ transform: translate(18px, -50%); }
+
   /* Disabled section look */
   .disabledSection{
     opacity: .55;
@@ -813,29 +754,21 @@ BASE_HEAD = """
 
   /* Jobs cards */
   .jobsGrid{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+
   .jobCard{
-    grid-column: span 12;
+    grid-column: span 12; /* mobile default */
     border: 1px solid var(--line);
     border-radius: 16px;
     background: var(--panel2);
     overflow:hidden;
   }
+  [data-theme="light"] .jobCard{ background: #ffffff; }
 
   /* Desktop: 2 jobs per row */
   @media (min-width: 900px){
-    .jobCard{
-      grid-column: span 6;
-    }
+    .jobCard{ grid-column: span 6; }
   }
 
-  /* Ultrawide: 3 jobs per row */
-  @media (min-width: 1400px){
-    .jobCard{
-      grid-column: span 4;
-    }
-  }
-
-  [data-theme="light"] .jobCard{ background: #ffffff; }
   .jobTop{
     padding: 12px 12px;
     border-bottom: 1px solid var(--line);
@@ -847,7 +780,7 @@ BASE_HEAD = """
   }
   [data-theme="light"] .jobTop{ background: #f3f4f6; }
   .jobName{ font-weight: 800; letter-spacing:.2px; }
-  .jobMeta{ margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.35; }
+  .jobMeta{ margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.55; }
   .jobBody{
     padding: 12px 12px;
     display:flex;
@@ -866,8 +799,6 @@ BASE_HEAD = """
     color: var(--text);
     background: var(--panel);
   }
-  .tagPill.ok { border-color: rgba(34,197,94,.45); }
-  .tagPill.off { opacity: .6; }
 
   table{ width:100%; border-collapse: collapse; overflow:hidden; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); }
   th, td{ padding: 10px 10px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }
@@ -1123,16 +1054,15 @@ BASE_HEAD = """
     showModal("jobBack");
   }
 
-  // ✅ Dynamic Run Now confirmation (expanded + bullet list)
+  // ✅ Dynamic Run Now confirmation (now includes more flags)
   function openRunNowConfirm(jobId, opts) {
     opts = opts || {};
     const app = (opts.app || "radarr").toLowerCase();
     const dryRun = !!opts.dryRun;
     const deleteFiles = !!opts.deleteFiles;
     const enabled = (opts.enabled === undefined) ? true : !!opts.enabled;
-
-    const addExcl = !!opts.addImportExclusion;
-    const sonarrMode = (opts.sonarrDeleteMode || "episodes_only").toString();
+    const importExcl = !!opts.addImportExclusion;
+    const sonarrMode = (opts.sonarrDeleteMode || "").toString();
 
     const hid = document.getElementById("runNowJobId");
     if (hid) hid.value = jobId || "";
@@ -1142,111 +1072,39 @@ BASE_HEAD = """
     const elDel = document.getElementById("rn_del");
     const elEnabled = document.getElementById("rn_enabled");
     const elExcl = document.getElementById("rn_excl");
-    const elSonModeWrap = document.getElementById("rn_son_mode_wrap");
-    const elSonMode = document.getElementById("rn_son_mode");
+    const elSonMode = document.getElementById("rn_sonmode");
+    const sonWrap = document.getElementById("rn_son_wrap");
 
     if (elApp) elApp.textContent = (app === "sonarr") ? "Sonarr" : "Radarr";
     if (elDry) elDry.textContent = dryRun ? "ON" : "OFF";
     if (elDel) elDel.textContent = deleteFiles ? "ON" : "OFF";
     if (elEnabled) elEnabled.textContent = enabled ? "Enabled" : "Disabled";
-    if (elExcl) elExcl.textContent = addExcl ? "ON" : "OFF";
+    if (elExcl) elExcl.textContent = importExcl ? "ON" : "OFF";
 
-    const isSonarr = (app === "sonarr");
-    if (elSonModeWrap) elSonModeWrap.style.display = isSonarr ? "" : "none";
-    if (elSonMode) {
-      const map = {
-        "episodes_only": "Episodes only (keep Series in Sonarr)",
-        "episodes_then_series_if_empty": "Episodes, Series only if empty (remove Series from Sonarr)",
-        "series_whole": "Whole Series (remove from Sonarr)"
-      };
-      elSonMode.textContent = map[sonarrMode] || sonarrMode;
-    }
+    if (sonWrap) sonWrap.style.display = (app === "sonarr" && sonarrMode) ? "" : "none";
+    if (elSonMode) elSonMode.textContent = sonarrMode || "";
 
     const msg = document.getElementById("rn_msg");
+    if (msg) {
+      const parts = [];
+      if (!enabled) parts.push("This job is currently disabled — enable it to run.");
+      if (!dryRun) parts.push("Dry Run is OFF — this will perform real actions.");
+      else parts.push("Dry Run is ON — this should only log changes.");
+      if (deleteFiles) parts.push("Delete Files is ON — files may be removed from disk.");
+      else parts.push("Delete Files is OFF — it should avoid disk deletes.");
+      if (importExcl) parts.push("Import Exclusion is ON — it may add exclusions to prevent re-import.");
+      else parts.push("Import Exclusion is OFF — it will not add exclusions.");
+      msg.textContent = parts.join(" ");
+    }
+
     const hintDelete = document.getElementById("rn_hint_delete");
     const hintNoDelete = document.getElementById("rn_hint_no_delete");
-    const hintExcl = document.getElementById("rn_hint_excl");
-
-    const stepsEl = document.getElementById("rn_steps");
-
-    const parts = [];
-    const steps = [];
-    let risk = 0; // 0 safe, 1 caution, 2 risky
-
-    if (!enabled) {
-      parts.push("This job is currently disabled — running now will still execute it.");
-      risk = Math.max(risk, 1);
-    }
-
-    if (dryRun) {
-      parts.push("Dry Run is ON — this is a safe test run (no real deletes should occur).");
-      steps.push("Perform a preview-like run and log what would happen (no changes expected).");
-    } else {
-      parts.push("Dry Run is OFF — this will perform real actions.");
-      steps.push("Execute the job immediately (real actions enabled).");
-      risk = Math.max(risk, 2);
-    }
-
-    if (deleteFiles) {
-      parts.push("Delete Files is ON — files may be removed from disk.");
-      steps.push("If items match the tag + age cutoff, delete media files from disk (via the app).");
-      risk = Math.max(risk, dryRun ? 1 : 2);
-    } else {
-      parts.push("Delete Files is OFF — it should avoid disk deletes.");
-      steps.push("Avoid deleting from disk (but the app may still update/remove items depending on backend behavior).");
-    }
-
-    if (addExcl) {
-      parts.push("Add Import Exclusion is ON — items may be prevented from re-importing.");
-      steps.push("Add an import exclusion to help prevent re-import.");
-      risk = Math.max(risk, 1);
-    } else {
-      steps.push("No import exclusion will be added.");
-    }
-
-    if (isSonarr) {
-      if (sonarrMode === "episodes_only") {
-        steps.push("Sonarr: delete eligible episode files only (series stays in Sonarr).");
-      } else if (sonarrMode === "episodes_then_series_if_empty") {
-        steps.push("Sonarr: delete eligible episodes first; remove series only if no files remain.");
-        risk = Math.max(risk, 2);
-      } else if (sonarrMode === "series_whole") {
-        steps.push("Sonarr: remove whole series when eligible.");
-        risk = Math.max(risk, 2);
-      } else {
-        steps.push("Sonarr: apply configured delete mode.");
-        risk = Math.max(risk, 1);
-      }
-    } else {
-      steps.push("Radarr: apply the configured tag + age cutoff.");
-    }
-
-    if (msg) msg.textContent = parts.join(" ");
-
-    if (stepsEl) {
-      const lis = steps.map(s => {
-        const esc = (s || "")
-          .replaceAll("&","&amp;")
-          .replaceAll("<","&lt;")
-          .replaceAll(">","&gt;");
-        return `<li class="muted">${esc}</li>`;
-      });
-      stepsEl.innerHTML = lis.join("");
-    }
-
     if (hintDelete) hintDelete.style.display = deleteFiles ? "" : "none";
     if (hintNoDelete) hintNoDelete.style.display = deleteFiles ? "none" : "";
-    if (hintExcl) hintExcl.style.display = addExcl ? "" : "none";
 
-    const btn = document.getElementById("rn_confirm_btn");
-    if (btn) {
-      btn.classList.remove("good", "warn", "bad");
-      if (risk === 0) btn.classList.add("good");
-      else if (risk === 1) btn.classList.add("warn");
-      else btn.classList.add("bad");
-
-      btn.textContent = dryRun ? "Yes, run now (dry-run)" : "Yes, run now";
-    }
+    // safety: if somehow opened while disabled, hide the confirm button
+    const confirmBtn = document.getElementById("rn_confirm_btn");
+    if (confirmBtn) confirmBtn.disabled = !enabled;
 
     showModal("runNowBack");
   }
@@ -1383,6 +1241,7 @@ BASE_HEAD = """
       setChecked("job_delete", del);
       setChecked("job_excl", excl);
 
+      // enabled moved to last
       setVal("job_enabled", enabled);
 
       showModal("jobBack");
@@ -1839,6 +1698,36 @@ def save_settings():
     return redirect("/settings")
 
 
+# ✅ Enabled toggle that saves immediately
+@app.post("/jobs/toggle-enabled")
+def jobs_toggle_enabled():
+    cfg = load_config()
+    job_id = (request.form.get("job_id") or "").strip()
+    enabled = request.form.get("enabled") == "on"
+
+    if not job_id:
+        flash("Missing job id.", "error")
+        return redirect("/jobs")
+
+    jobs = cfg.get("JOBS") or []
+    updated = False
+    for i, j in enumerate(jobs):
+        if str(j.get("id")) == job_id:
+            jj = normalize_job(j)
+            jj["enabled"] = bool(enabled)
+            jobs[i] = jj
+            updated = True
+            break
+
+    if not updated:
+        flash("Job not found.", "error")
+        return redirect("/jobs")
+
+    cfg["JOBS"] = [normalize_job(j) for j in jobs]
+    save_config(cfg)
+    return redirect("/jobs")
+
+
 @app.get("/jobs")
 def jobs_page():
     cfg = load_config()
@@ -1998,33 +1887,92 @@ def jobs_page():
     </div>
     """
 
+    # ✅ Dynamic modal content placeholders (expanded)
+    run_confirm_modal = """
+    <div class="modalBack" id="runNowBack">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="runNowTitle">
+        <div class="mh">
+          <h3 id="runNowTitle">Run Now confirmation</h3>
+        </div>
+        <div class="mb">
+          <div style="margin-bottom:10px;">
+            <div class="muted">App: <b><span id="rn_app">Radarr</span></b></div>
+            <div class="muted">
+              Job: <b><span id="rn_enabled">Enabled</span></b>
+              • Dry Run: <b><span id="rn_dry">OFF</span></b>
+              • Delete Files: <b><span id="rn_del">ON</span></b>
+              • Import Exclusion: <b><span id="rn_excl">OFF</span></b>
+            </div>
+            <div id="rn_son_wrap" class="muted" style="display:none; margin-top:6px;">
+              Sonarr delete mode: <b><span id="rn_sonmode"></span></b>
+            </div>
+          </div>
+
+          <p><b id="rn_msg">Dry Run is OFF — this will perform real actions.</b></p>
+
+          <p id="rn_hint_delete" class="muted">
+            With <b>Delete Files</b> enabled, it may delete files from disk via the app.
+          </p>
+
+          <p id="rn_hint_no_delete" class="muted" style="display:none;">
+            With <b>Delete Files</b> disabled, it should avoid deleting from disk.
+          </p>
+
+          <p class="muted">If you’re not sure, edit the job and enable <b>Dry Run</b>, then use Preview.</p>
+        </div>
+        <div class="mf">
+          <button class="btn" type="button" onclick="hideModal('runNowBack')">Cancel</button>
+          <form id="runNowFormConfirm" method="post" action="/jobs/run-now" style="margin:0;">
+            <input type="hidden" id="runNowJobId" name="job_id" value="">
+            <button id="rn_confirm_btn" class="btn bad" type="button" onclick="runNowSubmitConfirm()">Yes, run now</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    """
+
     job_cards = []
     for j in cfg["JOBS"]:
         j = normalize_job(j)
         sched = schedule_label(j["SCHED_DAY"], j["SCHED_HOUR"])
-        enabled_cls = "ok" if j["enabled"] else "off"
-        enabled_text = "Enabled" if j["enabled"] else "Disabled"
-        dry = "on" if j["DRY_RUN"] else "OFF"
-        delete_files = "on" if j["DELETE_FILES"] else "off"
         app_key = (j.get("APP") or "radarr").lower()
         app_label = "Radarr" if app_key == "radarr" else "Sonarr"
 
+        dry = "on" if j["DRY_RUN"] else "off"
+        delete_files = "on" if j["DELETE_FILES"] else "off"
+        import_excl = "on" if j["ADD_IMPORT_EXCLUSION"] else "off"
+
+        # ✅ Run Now disabled when job disabled
+        run_now_disabled_attr = "" if j["enabled"] else "disabled"
+        run_now_title = "Run Now" if j["enabled"] else "Job is disabled"
+
+        if j["DRY_RUN"]:
+            run_now_html = f"""
+              <form method="post" action="/jobs/run-now" style="margin:0;">
+                <input type="hidden" name="job_id" value="{safe_html(j["id"])}">
+                <button class="btn good" type="submit" {run_now_disabled_attr} title="{safe_html(run_now_title)}">Run Now</button>
+              </form>
+            """
+        else:
+            run_now_html = f"""
+              <button class="btn bad"
+                type="button"
+                {run_now_disabled_attr}
+                title="{safe_html(run_now_title)}"
+                onclick="openRunNowConfirm('{safe_html(j["id"])}', {{
+                  app: '{safe_html(app_key)}',
+                  dryRun: {str(bool(j["DRY_RUN"])).lower()},
+                  deleteFiles: {str(bool(j["DELETE_FILES"])).lower()},
+                  addImportExclusion: {str(bool(j["ADD_IMPORT_EXCLUSION"])).lower()},
+                  enabled: {str(bool(j["enabled"])).lower()},
+                  sonarrDeleteMode: '{safe_html(j.get("SONARR_DELETE_MODE",""))}'
+                }})">Run Now</button>
+            """
+
+        # ✅ Stacked job meta (all values bold)
         sonarr_mode_line = ""
         if app_key == "sonarr":
-            sonarr_mode_line = f"<br>Sonarr mode: <b>{safe_html(sonarr_delete_mode_label(j.get('SONARR_DELETE_MODE')))}</b>"
-
-        run_btn_cls = "good" if j["DRY_RUN"] else "bad"
-        run_now_html = f"""
-          <button class="btn {run_btn_cls}" type="button"
-            onclick="openRunNowConfirm('{safe_html(j["id"])}', {{
-              app: '{safe_html(app_key)}',
-              dryRun: {str(bool(j["DRY_RUN"])).lower()},
-              deleteFiles: {str(bool(j["DELETE_FILES"])).lower()},
-              addImportExclusion: {str(bool(j["ADD_IMPORT_EXCLUSION"])).lower()},
-              enabled: {str(bool(j["enabled"])).lower()},
-              sonarrDeleteMode: '{safe_html(j.get("SONARR_DELETE_MODE","episodes_only"))}'
-            }})">Run Now</button>
-        """
+            sonarr_mode_line = f'<div>Sonarr mode: <b>{safe_html(sonarr_delete_mode_label(j.get("SONARR_DELETE_MODE")))}</b></div>'
 
         job_cards.append(f"""
           <div class="jobCard">
@@ -2032,9 +1980,14 @@ def jobs_page():
               <div>
                 <div class="jobName">{safe_html(j["name"])}</div>
                 <div class="jobMeta">
-                  App: <b>{safe_html(app_label)}</b> • Tag: <b>{safe_html(j["TAG_LABEL"])}</b> • Older than <b>{j["DAYS_OLD"]}</b> days
-                  {sonarr_mode_line}<br>
-                  Schedule: <b>{safe_html(sched)}</b> • Dry-run: <b>{dry}</b> • Delete files: <b>{delete_files}</b>
+                  <div>App: <b>{safe_html(app_label)}</b></div>
+                  <div>Tag: <b>{safe_html(j["TAG_LABEL"])}</b></div>
+                  <div>Older than <b>{j["DAYS_OLD"]}</b> days</div>
+                  {sonarr_mode_line}
+                  <div>Schedule: <b>{safe_html(sched)}</b></div>
+                  <div>Delete files: <b>{delete_files}</b></div>
+                  <div>Import Exclusion: <b>{import_excl}</b></div>
+                  <div>Dry-run: <b>{dry}</b></div>
                 </div>
               </div>
               <div class="btnrow">
@@ -2045,7 +1998,14 @@ def jobs_page():
 
             <div class="jobBody">
               <div class="btnrow">
-                <span class="tagPill {enabled_cls}">{enabled_text}</span>
+                <form method="post" action="/jobs/toggle-enabled" style="margin:0; display:flex; align-items:center; gap:10px;">
+                  <input type="hidden" name="job_id" value="{safe_html(j["id"])}">
+                  <div class="muted" style="font-weight:700;">Enabled</div>
+                  <label class="switch sm" title="Enable/Disable this job">
+                    <input type="checkbox" name="enabled" {"checked" if j["enabled"] else ""} onchange="this.form.submit()">
+                    <span class="slider"></span>
+                  </label>
+                </form>
                 <span class="tagPill">ID: <code>{safe_html(j["id"])}</code></span>
               </div>
 
@@ -2120,7 +2080,7 @@ def jobs_page():
       </div>
 
       {job_modal}
-      {run_now_modal_html()}
+      {run_confirm_modal}
     """
     return render_template_string(shell("mediareaparr • Jobs", "jobs", body))
 
@@ -2153,7 +2113,6 @@ def jobs_save():
         if sonarr_mode not in SONARR_DELETE_MODES:
             sonarr_mode = "episodes_only"
         if app_key != "sonarr":
-            # keep a stable value but it won't be used
             sonarr_mode = "episodes_only"
 
         job = {
@@ -2227,9 +2186,16 @@ def jobs_delete():
 
 @app.post("/jobs/run-now")
 def jobs_run_now():
+    cfg = load_config()
     job_id = (request.form.get("job_id") or "").strip()
     if not job_id:
         flash("Missing job id.", "error")
+        return redirect("/jobs")
+
+    # Safety: prevent running disabled jobs
+    job = next((normalize_job(j) for j in (cfg.get("JOBS") or []) if str(j.get("id")) == job_id), None)
+    if job and not job.get("enabled", True):
+        flash("Job is disabled. Enable it before running.", "error")
         return redirect("/jobs")
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -2304,24 +2270,94 @@ def preview():
               </tr>
             """
 
-        app_key = (job.get("APP") or "radarr").lower()
-        run_btn_cls = "good" if job.get("DRY_RUN") else "bad"
-        run_now_html = f"""
-          <button class="btn {run_btn_cls}" type="button"
-            onclick="openRunNowConfirm('{safe_html(job["id"])}', {{
-              app: '{safe_html(app_key)}',
-              dryRun: {str(bool(job.get("DRY_RUN", True))).lower()},
-              deleteFiles: {str(bool(job.get("DELETE_FILES", True))).lower()},
-              addImportExclusion: {str(bool(job.get("ADD_IMPORT_EXCLUSION", False))).lower()},
-              enabled: {str(bool(job.get("enabled", True))).lower()},
-              sonarrDeleteMode: '{safe_html(job.get("SONARR_DELETE_MODE","episodes_only"))}'
-            }})">Run Now</button>
+        # ✅ Run Now disabled when job disabled
+        run_now_disabled_attr = "" if job["enabled"] else "disabled"
+        run_now_title = "Run Now" if job["enabled"] else "Job is disabled"
+
+        if job["DRY_RUN"]:
+            run_now_html = f"""
+              <form method="post" action="/jobs/run-now" style="margin:0;">
+                <input type="hidden" name="job_id" value="{safe_html(job["id"])}">
+                <button class="btn good" type="submit" {run_now_disabled_attr} title="{safe_html(run_now_title)}">Run Now</button>
+              </form>
+            """
+        else:
+            run_now_html = f"""
+              <button class="btn bad" type="button"
+                {run_now_disabled_attr}
+                title="{safe_html(run_now_title)}"
+                onclick="openRunNowConfirm('{safe_html(job["id"])}', {{
+                  app: '{safe_html(job.get("APP","radarr"))}',
+                  dryRun: {str(bool(job["DRY_RUN"])).lower()},
+                  deleteFiles: {str(bool(job.get("DELETE_FILES", True))).lower()},
+                  addImportExclusion: {str(bool(job.get("ADD_IMPORT_EXCLUSION", False))).lower()},
+                  enabled: {str(bool(job.get("enabled", True))).lower()},
+                  sonarrDeleteMode: '{safe_html(job.get("SONARR_DELETE_MODE",""))}'
+                }})">Run Now</button>
+            """
+
+        # ✅ Same dynamic modal as Jobs page
+        run_confirm_modal = """
+        <div class="modalBack" id="runNowBack">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="runNowTitle">
+            <div class="mh"><h3 id="runNowTitle">Run Now confirmation</h3></div>
+            <div class="mb">
+              <div style="margin-bottom:10px;">
+                <div class="muted">App: <b><span id="rn_app">Radarr</span></b></div>
+                <div class="muted">
+                  Job: <b><span id="rn_enabled">Enabled</span></b>
+                  • Dry Run: <b><span id="rn_dry">OFF</span></b>
+                  • Delete Files: <b><span id="rn_del">ON</span></b>
+                  • Import Exclusion: <b><span id="rn_excl">OFF</span></b>
+                </div>
+                <div id="rn_son_wrap" class="muted" style="display:none; margin-top:6px;">
+                  Sonarr delete mode: <b><span id="rn_sonmode"></span></b>
+                </div>
+              </div>
+
+              <p><b id="rn_msg">Dry Run is OFF — this will perform real actions.</b></p>
+
+              <p id="rn_hint_delete" class="muted">
+                With <b>Delete Files</b> enabled, it may delete files from disk via the app.
+              </p>
+
+              <p id="rn_hint_no_delete" class="muted" style="display:none;">
+                With <b>Delete Files</b> disabled, it should avoid deleting from disk.
+              </p>
+
+              <p class="muted">If you’re not sure, edit the job and enable <b>Dry Run</b>, then use Preview.</p>
+            </div>
+            <div class="mf">
+              <button class="btn" type="button" onclick="hideModal('runNowBack')">Cancel</button>
+              <form id="runNowFormConfirm" method="post" action="/jobs/run-now" style="margin:0;">
+                <input type="hidden" id="runNowJobId" name="job_id" value="">
+                <button id="rn_confirm_btn" class="btn bad" type="button" onclick="runNowSubmitConfirm()">Yes, run now</button>
+              </form>
+            </div>
+          </div>
+        </div>
         """
 
         app_label = "Sonarr" if job.get("APP") == "sonarr" else "Radarr"
+        sched_txt = schedule_label(job["SCHED_DAY"], job["SCHED_HOUR"])
+        delete_files = "on" if job["DELETE_FILES"] else "off"
+        import_excl = "on" if job["ADD_IMPORT_EXCLUSION"] else "off"
+        dry = "on" if job["DRY_RUN"] else "off"
+
+        enabled_toggle_html = f"""
+        <form method="post" action="/jobs/toggle-enabled" style="margin:0; display:flex; align-items:center; gap:10px;">
+          <input type="hidden" name="job_id" value="{safe_html(job["id"])}">
+          <div class="muted" style="font-weight:700;">Enabled</div>
+          <label class="switch sm" title="Enable/Disable this job">
+            <input type="checkbox" name="enabled" {"checked" if job["enabled"] else ""} onchange="this.form.submit()">
+            <span class="slider"></span>
+          </label>
+        </form>
+        """
+
         sonarr_mode_line = ""
         if job.get("APP") == "sonarr":
-            sonarr_mode_line = f" • Mode: <b>{safe_html(sonarr_delete_mode_label(job.get('SONARR_DELETE_MODE')))}</b>"
+            sonarr_mode_line = f'<div>Sonarr mode: <b>{safe_html(sonarr_delete_mode_label(job.get("SONARR_DELETE_MODE")))}</b></div>'
 
         body = f"""
           <div class="grid">
@@ -2334,10 +2370,23 @@ def preview():
                 </div>
               </div>
               <div class="bd">
-                <div class="muted">
-                  App: <b>{safe_html(app_label)}</b>{sonarr_mode_line} • Job: <b>{safe_html(job["name"])}</b> • Tag {safe_html(job["TAG_LABEL"])} • Older than {job["DAYS_OLD"]} days
+                <div class="jobMeta">
+                  <div>Job: <b>{safe_html(job["name"])}</b></div>
+                  <div>App: <b>{safe_html(app_label)}</b></div>
+                  <div>Tag: <b>{safe_html(job["TAG_LABEL"])}</b></div>
+                  <div>Older than <b>{job["DAYS_OLD"]}</b> days</div>
+                  {sonarr_mode_line}
+                  <div>Schedule: <b>{safe_html(sched_txt)}</b></div>
+                  <div>Delete files: <b>{delete_files}</b></div>
+                  <div>Import Exclusion: <b>{import_excl}</b></div>
+                  <div>Dry-run: <b>{dry}</b></div>
                 </div>
-                <div class="muted" style="margin-top:6px;">Found <b>{len(candidates)}</b> candidate(s). Preview only (no deletes).</div>
+
+                <div style="margin-top:10px;">
+                  {enabled_toggle_html}
+                </div>
+
+                <div class="muted" style="margin-top:10px;">Found <b>{len(candidates)}</b> candidate(s). Preview only (no deletes).</div>
                 <div class="muted" style="margin-top:6px;">Cutoff: <code>{safe_html(cutoff)}</code></div>
 
                 <div class="tablewrap" style="margin-top:12px;">
@@ -2359,7 +2408,7 @@ def preview():
               </div>
             </div>
           </div>
-          {run_now_modal_html()}
+          {run_confirm_modal}
         """
         return render_template_string(shell("mediareaparr • Preview", "jobs", body))
 
