@@ -659,6 +659,9 @@ BASE_HEAD = """
     cursor:pointer;
     font-weight: 600;
     font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
   }
   .btn:hover{ border-color: rgba(34,197,94,.45); }
   .btn:disabled{
@@ -820,15 +823,36 @@ BASE_HEAD = """
   .enableWrap{ display:flex; align-items:center; gap:10px; }
   .enableLbl{ font-size: 12px; color: var(--muted); white-space: nowrap; }
 
-  .jobBody{ padding: 12px 12px; background: var(--panel2); }
+  /* ✅ Job body 2-col: left action rail, right meta */
+  .jobBody{
+    padding: 12px 12px;
+    background: var(--panel2);
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 12px;
+    align-items: start;
+  }
   [data-theme="light"] .jobBody{ background: #ffffff; }
+
+  .jobRail{
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-self: start;
+  }
+  .jobRail .btn{
+    width: 100%;
+    text-align: left;
+    justify-content: flex-start;
+  }
 
   .metaStack{ display:flex; flex-direction: column; gap: 6px; font-size: 13px; }
   .metaRow{ display:flex; align-items: baseline; gap: 10px; line-height: 1.35; }
   .metaLabel{ width: 130px; color: var(--muted); flex: 0 0 auto; }
   .metaVal{ color: var(--text); flex: 1 1 auto; min-width: 0; word-break: break-word; }
 
-  .jobActions{ margin-top: 12px; display:flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+  /* Old bottom action row (kept harmless, but no longer used for job cards) */
+  .jobActions{ margin-top: 0; display: block; }
 
   /* Modal */
   .modalBack{
@@ -1886,6 +1910,33 @@ def jobs_page():
               </div>
             """
 
+        # ✅ left action rail: Run Now / Edit / Delete
+        edit_btn = f"""
+          <button class="btn"
+                  type="button"
+                  onclick="openEditJob(this)"
+                  data-id="{safe_html(j["id"])}"
+                  data-name="{safe_html(j["name"])}"
+                  data-enabled="{ '1' if j["enabled"] else '0' }"
+                  data-app="{safe_html(app_key)}"
+                  data-tag="{safe_html(j["TAG_LABEL"])}"
+                  data-sonarr-mode="{safe_html(j.get('SONARR_DELETE_MODE','episodes_only'))}"
+                  data-days="{j["DAYS_OLD"]}"
+                  data-day="{safe_html(j["SCHED_DAY"])}"
+                  data-hour="{j["SCHED_HOUR"]}"
+                  data-dry="{ '1' if j["DRY_RUN"] else '0' }"
+                  data-del="{ '1' if j["DELETE_FILES"] else '0' }"
+                  data-excl="{ '1' if j["ADD_IMPORT_EXCLUSION"] else '0' }">Edit</button>
+        """
+
+        delete_btn = f"""
+          <form method="post" action="/jobs/delete" style="margin:0;"
+                onsubmit="return confirm('Are you sure you want to delete this job?');">
+            <input type="hidden" name="job_id" value="{safe_html(j["id"])}">
+            <button class="btn bad" type="submit">Delete</button>
+          </form>
+        """
+
         job_cards.append(f"""
           <div class="jobCard">
             <div class="jobHeader">
@@ -1912,6 +1963,12 @@ def jobs_page():
             </div>
 
             <div class="jobBody">
+              <div class="jobRail">
+                {run_now_button_html(j)}
+                {edit_btn}
+                {delete_btn}
+              </div>
+
               <div class="metaStack">
                 <div class="metaRow">
                   <div class="metaLabel">App:</div>
@@ -1949,32 +2006,6 @@ def jobs_page():
                   <div class="metaLabel">Dry-run:</div>
                   <div class="metaVal"><b>{dry_val}</b></div>
                 </div>
-              </div>
-
-              <div class="jobActions">
-                <button class="btn"
-                        type="button"
-                        onclick="openEditJob(this)"
-                        data-id="{safe_html(j["id"])}"
-                        data-name="{safe_html(j["name"])}"
-                        data-enabled="{ '1' if j["enabled"] else '0' }"
-                        data-app="{safe_html(app_key)}"
-                        data-tag="{safe_html(j["TAG_LABEL"])}"
-                        data-sonarr-mode="{safe_html(j.get('SONARR_DELETE_MODE','episodes_only'))}"
-                        data-days="{j["DAYS_OLD"]}"
-                        data-day="{safe_html(j["SCHED_DAY"])}"
-                        data-hour="{j["SCHED_HOUR"]}"
-                        data-dry="{ '1' if j["DRY_RUN"] else '0' }"
-                        data-del="{ '1' if j["DELETE_FILES"] else '0' }"
-                        data-excl="{ '1' if j["ADD_IMPORT_EXCLUSION"] else '0' }">Edit</button>
-
-                {run_now_button_html(j)}
-
-                <form method="post" action="/jobs/delete" style="margin:0;"
-                      onsubmit="return confirm('Are you sure you want to delete this job?');">
-                  <input type="hidden" name="job_id" value="{safe_html(j["id"])}">
-                  <button class="btn bad" type="submit">Delete</button>
-                </form>
               </div>
             </div>
           </div>
