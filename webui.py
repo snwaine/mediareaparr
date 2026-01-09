@@ -861,7 +861,7 @@ BASE_HEAD = """
   .jobsGrid{
     display:grid; 
     gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(360px, 460px) );
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr) );
     justify-content: center;
   }
   
