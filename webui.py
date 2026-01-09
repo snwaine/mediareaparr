@@ -916,7 +916,7 @@ BASE_HEAD = """
     padding: 12px 12px;
     background: var(--panel2);
     display: grid;
-    grid-template-columns: 1fr 80px;
+    grid-template-columns: 1fr 70px;
     gap: 12px;
     align-items: start;
   }
