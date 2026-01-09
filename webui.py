@@ -935,9 +935,9 @@ BASE_HEAD = """
     padding: 10px 8px;
   }
 
-  .metaStack{ display:flex; flex-direction: column; gap: 6px; font-size: 10px; }
-  .metaRow{ display:flex; align-items: baseline; gap: 8px; line-height: 1.35; }
-  .metaLabel{ width: 130px; color: var(--muted); flex: 0 0 auto; }
+  .metaStack{ display:flex; flex-direction: column; gap: 6px; font-size: 11px; }
+  .metaRow{ display:flex; align-items: baseline; gap: 9px; line-height: 1.35; }
+  .metaLabel{ width: 100px; color: var(--muted); flex: 0 0 auto; }
   .metaVal{ color: var(--text); flex: 1 1 auto; min-width: 0; word-break: break-word; }
 
   .modalBack{
