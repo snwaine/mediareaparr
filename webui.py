@@ -554,6 +554,23 @@ BASE_HEAD = """
       var(--bg);
     background-attachment: fixed;
     color: var(--text);
+
+    /* Footer always lands at bottom */
+    display:flex;
+    flex-direction: column;
+  }
+
+  /* Soft bottom “landing” gradient */
+  body:after{
+    content:"";
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    height: 140px;
+    pointer-events: none;
+    background: linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,.35));
+  }
+  body[data-theme="light"]:after{
+    background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(0,0,0,.08));
   }
 
   body[data-theme="dark"] { color-scheme: dark; }
@@ -562,7 +579,13 @@ BASE_HEAD = """
   a{ color: var(--text); text-decoration: none; }
   a:hover{ text-decoration: underline; }
 
-  .wrap{ max-width: 1200px; margin: 0 auto; padding: 22px 18px 36px; }
+  .wrap{
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 22px 18px 36px;
+    width: 100%;
+    flex: 1 0 auto;
+  }
 
   .topbar{
     display:flex; align-items:center; justify-content: space-between;
@@ -850,8 +873,8 @@ BASE_HEAD = """
   }
   .jobRail .btn{
     width: 100%;
-    text-align: center;       /* rail is narrow now */
-    justify-content: center;  /* center content */
+    text-align: center;
+    justify-content: center;
     padding: 10px 8px;
   }
 
@@ -958,6 +981,30 @@ BASE_HEAD = """
   .toast.err{ border-color: rgba(239,68,68,.55); }
   @keyframes toastIn { to { opacity: 1; transform: translateY(0); } }
   @keyframes toastOut { to { opacity: 0; transform: translateY(10px); } }
+
+  /* Sticky-ish footer bar (lands at bottom, not fixed) */
+  .footerBar{
+    width: 100%;
+    flex: 0 0 auto;
+    padding: 14px 18px 18px;
+    box-sizing: border-box;
+  }
+  .footerInner{
+    max-width: 1200px;
+    margin: 0 auto;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+    color: var(--muted);
+    font-size: 12px;
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .footerInner a{ color: var(--text); }
+  .footerInner a:hover{ text-decoration: underline; }
 </style>
 
 <script>
@@ -976,10 +1023,56 @@ BASE_HEAD = """
       .replaceAll("'","&#39;");
   }
 
+  // -------------------
+  // Job modal dirty tracking (Option B)
+  // -------------------
+  window.__JOB_MODAL_INITIAL = "";
+  window.__JOB_MODAL_DIRTY = false;
+
+  function jobFormSnapshot(){
+    const form = $("jobForm");
+    if (!form) return "";
+    const fd = new FormData(form);
+    const entries = [];
+    for (const [k, v] of fd.entries()){
+      entries.push([k, (v ?? "").toString()]);
+    }
+    // include unchecked checkboxes explicitly
+    const cbs = form.querySelectorAll('input[type="checkbox"][name]');
+    for (const cb of cbs){
+      if (!fd.has(cb.name)) entries.push([cb.name, ""]);
+    }
+    entries.sort((a,b) => (a[0]+a[1]).localeCompare(b[0]+b[1]));
+    return JSON.stringify(entries);
+  }
+
+  function jobModalMarkClean(){
+    window.__JOB_MODAL_INITIAL = jobFormSnapshot();
+    window.__JOB_MODAL_DIRTY = false;
+  }
+
+  function jobModalUpdateDirty(){
+    const snap = jobFormSnapshot();
+    window.__JOB_MODAL_DIRTY = (snap !== window.__JOB_MODAL_INITIAL);
+  }
+
+  function maybeCloseJobModal(){
+    const back = $("jobBack");
+    if (!back || back.style.display !== "flex") {
+      hideModal("jobBack");
+      return;
+    }
+    jobModalUpdateDirty();
+    if (window.__JOB_MODAL_DIRTY){
+      if (!confirm("Discard changes to this job?")) return;
+    }
+    hideModal("jobBack");
+  }
+
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       hideModal("runNowBack");
-      hideModal("jobBack");
+      maybeCloseJobModal();
     }
   });
 
@@ -1030,6 +1123,8 @@ BASE_HEAD = """
     const appKey = appSel ? (appSel.value || "radarr") : "radarr";
     rebuildTagOptions(appKey, "");
     updateSonarrModeVisibility(appKey);
+    // app change counts as edit
+    setTimeout(jobModalUpdateDirty, 0);
   }
 
   function openNewJob(){
@@ -1058,6 +1153,9 @@ BASE_HEAD = """
     const t = $("jobTitle");
     if (t) t.textContent = "Add Job";
     showModal("jobBack");
+
+    // mark clean once visible/filled
+    setTimeout(jobModalMarkClean, 0);
   }
 
   function openEditJob(btn){
@@ -1089,6 +1187,9 @@ BASE_HEAD = """
     const t = $("jobTitle");
     if (t) t.textContent = "Edit Job";
     showModal("jobBack");
+
+    // mark clean once visible/filled
+    setTimeout(jobModalMarkClean, 0);
   }
 
   function openRunNowConfirm(jobId, opts){
@@ -1114,7 +1215,6 @@ BASE_HEAD = """
     const msg = $("rn_msg");
     if (msg){
       const parts = [];
-      if (!enabled) parts.push("This job is currently disabled — running now will still execute it.");
       if (!dryRun) parts.push("Dry Run is OFF — this will perform real actions.");
       parts.push(deleteFiles ? "Delete Files is ON — files may be removed from disk." : "Delete Files is OFF — it should avoid disk deletes.");
       msg.textContent = parts.join(" ");
@@ -1210,8 +1310,28 @@ BASE_HEAD = """
     updateSaveState();
   }
 
-  document.addEventListener("input", onSettingsEdited);
-  document.addEventListener("change", onSettingsEdited);
+  document.addEventListener("input", (e) => {
+    onSettingsEdited(e);
+    // job modal dirty tracking
+    const back = $("jobBack");
+    if (back && back.style.display === "flex") {
+      const form = $("jobForm");
+      if (form && form.contains(e.target)) {
+        jobModalUpdateDirty();
+      }
+    }
+  });
+  document.addEventListener("change", (e) => {
+    onSettingsEdited(e);
+    // job modal dirty tracking
+    const back = $("jobBack");
+    if (back && back.style.display === "flex") {
+      const form = $("jobForm");
+      if (form && form.contains(e.target)) {
+        jobModalUpdateDirty();
+      }
+    }
+  });
 
   document.addEventListener("DOMContentLoaded", () => {
     const radSec = $("radarrSection");
@@ -1262,6 +1382,7 @@ BASE_HEAD = """
       setVal("job_enabled", enabled);
 
       showModal("jobBack");
+      setTimeout(jobModalMarkClean, 0);
     } else {
       const appSel = $("job_app");
       const appKey = appSel ? (appSel.value || "radarr") : "radarr";
@@ -1306,6 +1427,17 @@ def shell(page_title: str, active: str, body: str):
 
     toasts = render_toasts()
 
+    footer = """
+      <div class="footerBar">
+        <div class="footerInner">
+          <div>mediareaparr • Radarr/Sonarr cleanup scheduler</div>
+          <div class="muted">
+            <a href="/status"><b>Status</b></a> • <a href="/settings"><b>Settings</b></a> • <a href="/jobs"><b>Jobs</b></a>
+          </div>
+        </div>
+      </div>
+    """
+
     return f"""
 <!doctype html>
 <html>
@@ -1329,6 +1461,7 @@ def shell(page_title: str, active: str, body: str):
     {body}
   </div>
 
+  {footer}
   {toasts}
 </body>
 </html>
@@ -1738,13 +1871,17 @@ def jobs_toggle_enabled():
 def jobs_page():
     cfg = load_config()
 
-    radarr_labels = get_tag_labels(cfg, "radarr")
-    sonarr_labels = get_tag_labels(cfg, "sonarr")
+    # Option A: availability is based on readiness, NOT “has tags”
+    radarr_ready = is_app_ready(cfg, "radarr")
+    sonarr_ready = is_app_ready(cfg, "sonarr")
+
+    radarr_labels = get_tag_labels(cfg, "radarr") if radarr_ready else []
+    sonarr_labels = get_tag_labels(cfg, "sonarr") if sonarr_ready else []
 
     available_apps = []
-    if radarr_labels:
+    if radarr_ready:
         available_apps.append("radarr")
-    if sonarr_labels:
+    if sonarr_ready:
         available_apps.append("sonarr")
 
     default_app = "radarr"
@@ -1876,7 +2013,7 @@ def jobs_page():
           </div>
 
           <div class="mf">
-            <button class="btn" type="button" onclick="hideModal('jobBack')">Cancel</button>
+            <button class="btn" type="button" onclick="maybeCloseJobModal()">Cancel</button>
             <button class="btn primary" type="submit">Save Job</button>
           </div>
         </form>
