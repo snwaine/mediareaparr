@@ -858,15 +858,20 @@ BASE_HEAD = """
 
   .disabledSection{ opacity: .55; filter: grayscale(.12); pointer-events: none; }
 
-  .jobsGrid{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+  .jobsGrid{
+    display:grid; 
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr) );
+    justify-content: center;
+  }
   
   .jobCard{
-    grid-column: span 12;
     border: 1px solid var(--line);
     border-radius: 16px;
     background: var(--panel2);
     overflow:hidden;
     max-width: 520px;
+    grid-column: auto !important;
   }
   
   /* Tablet / small desktop: 2 per row */
@@ -878,7 +883,7 @@ BASE_HEAD = """
   /* Ultrawide: 4 per row */
   @media (min-width: 1800px){ .jobCard{ grid-column: span 3; } }
   @media (min-width: 1800px){ .jobsGrid{ gap: 20px; } }
-  
+
   [data-theme="light"] .jobCard{ background: #ffffff; }
 
   .jobHeader{
@@ -911,7 +916,7 @@ BASE_HEAD = """
     padding: 12px 12px;
     background: var(--panel2);
     display: grid;
-    grid-template-columns: 1fr 80px;
+    grid-template-columns: 1fr 70px;
     gap: 12px;
     align-items: start;
   }
@@ -930,9 +935,9 @@ BASE_HEAD = """
     padding: 10px 8px;
   }
 
-  .metaStack{ display:flex; flex-direction: column; gap: 6px; font-size: 13px; }
-  .metaRow{ display:flex; align-items: baseline; gap: 10px; line-height: 1.35; }
-  .metaLabel{ width: 130px; color: var(--muted); flex: 0 0 auto; }
+  .metaStack{ display:flex; flex-direction: column; gap: 6px; font-size: 11px; }
+  .metaRow{ display:flex; align-items: baseline; gap: 8px; line-height: 1.35; }
+  .metaLabel{ width: 100px; color: var(--muted); flex: 0 0 auto; }
   .metaVal{ color: var(--text); flex: 1 1 auto; min-width: 0; word-break: break-word; }
 
   .modalBack{

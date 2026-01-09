@@ -831,7 +831,7 @@ BASE_HEAD = """
   }
   [data-theme="light"] .toggleRow{ background: #ffffff; }
 
-  .switch{ position: relative; width: 52px; height: 30px; display: inline-block; flex: 0 0 auto; }
+  .switch{ position: relative; width: 42px; height: 20px; display: inline-block; flex: 0 0 auto; }
   .switch input{ opacity: 0; width: 0; height: 0; }
   .slider{
     position:absolute; cursor:pointer; inset:0;
