@@ -858,7 +858,12 @@ BASE_HEAD = """
 
   .disabledSection{ opacity: .55; filter: grayscale(.12); pointer-events: none; }
 
-  .jobsGrid{ display:grid; grid-template-columns: repeat( auto-fit, minmax(360px, 420px) ); justify-content: center; gap: 14px; }
+  .jobsGrid{
+    display:grid; 
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 420px) );
+    justify-content: center;
+  }
   
   .jobCard{
     border: 1px solid var(--line);
@@ -866,6 +871,7 @@ BASE_HEAD = """
     background: var(--panel2);
     overflow:hidden;
     max-width: 520px;
+    grid-column: auto !important;
   }
   
   /* Tablet / small desktop: 2 per row */
