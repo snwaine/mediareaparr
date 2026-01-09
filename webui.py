@@ -545,10 +545,15 @@ BASE_HEAD = """
   * { box-sizing: border-box; }
   html, body { height: 100%; }
 
+  /* ✅ Full-height layout so every page reaches bottom */
   body{
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+
     margin:0;
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
+
     background:
       radial-gradient(900px 520px at 18% 8%, rgba(34,197,94,.22), transparent 62%),
       radial-gradient(880px 520px at 92% 10%, rgba(22,163,74,.16), transparent 60%),
@@ -562,10 +567,45 @@ BASE_HEAD = """
   body[data-theme="dark"] { color-scheme: dark; }
   body[data-theme="light"] { color-scheme: light; }
 
+  /* ✅ Soft bottom landing gradient */
+  body::after{
+    content:"";
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 160px;
+    pointer-events: none;
+    z-index: 0;
+    background: linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,.22));
+  }
+  body[data-theme="light"]::after{
+    background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(0,0,0,.06));
+  }
+
   a{ color: var(--text); text-decoration: none; }
   a:hover{ text-decoration: underline; }
 
-  .wrap{ max-width: 1200px; margin: 0 auto; padding: 22px 18px 36px; }
+  .wrap{
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 22px 18px 36px;
+
+    flex: 1 1 auto;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+
+    position: relative;
+    z-index: 1; /* above landing gradient */
+  }
+
+  .page{
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
 
   .topbar{
     display:flex; align-items:center; justify-content: space-between;
@@ -619,7 +659,15 @@ BASE_HEAD = """
     box-shadow: 0 0 0 3px rgba(34,197,94,.16);
   }
 
-  .grid{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-top: 16px; }
+  .grid{
+    display:grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 14px;
+    margin-top: 16px;
+
+    flex: 1 1 auto;
+    align-content: start;
+  }
 
   .card{
     grid-column: span 12;
@@ -655,12 +703,30 @@ BASE_HEAD = """
     display: inline-flex;
     align-items: center;
     gap: 8px;
+
+    transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease, filter .18s ease;
   }
-  .btn:hover{ border-color: rgba(34,197,94,.45); }
+
+  /* ✅ Buttons should never underline (Preview is an <a class="btn">) */
+  a.btn:hover{ text-decoration: none; }
+
+  /* ✅ Subtle hover glow */
+  .btn:hover{
+    border-color: rgba(34,197,94,.55);
+    box-shadow: 0 0 0 3px rgba(34,197,94,.10), 0 10px 22px rgba(0,0,0,.22);
+    transform: translateY(-1px);
+  }
+  .btn:active{
+    transform: translateY(0);
+    box-shadow: 0 0 0 2px rgba(34,197,94,.08), 0 6px 14px rgba(0,0,0,.18);
+  }
+
   .btn:disabled{
     opacity: .45;
     cursor: not-allowed;
     filter: grayscale(0.35);
+    box-shadow: none;
+    transform: none;
   }
   .btn.primary{
     border-color: rgba(34,197,94,.45);
@@ -816,34 +882,48 @@ BASE_HEAD = """
   .enableWrap{ display:flex; align-items:center; gap:10px; }
   .enableLbl{ font-size: 12px; color: var(--muted); white-space: nowrap; }
 
-  /* ✅ Job body 2-col: meta left, action rail right */
+  /* ✅ Job body 2-col with action rail on RIGHT
+     User requested: grid-template-columns: 80px 1fr;
+     We use RTL so the 80px column lands on the RIGHT.
+  */
   .jobBody{
     padding: 12px 12px;
     background: var(--panel2);
     display: grid;
-    grid-template-columns: 1fr 80px; /* requested */
+    grid-template-columns: 80px 1fr;  /* requested */
     gap: 12px;
     align-items: start;
+
+    direction: rtl; /* makes first column render on the right */
   }
   [data-theme="light"] .jobBody{ background: #ffffff; }
+
+  .metaStack{
+    display:flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+
+    direction: ltr; /* reset text direction */
+  }
+  .metaRow{ display:flex; align-items: baseline; gap: 10px; line-height: 1.35; }
+  .metaLabel{ width: 130px; color: var(--muted); flex: 0 0 auto; }
+  .metaVal{ color: var(--text); flex: 1 1 auto; min-width: 0; word-break: break-word; }
 
   .jobRail{
     display: flex;
     flex-direction: column;
     gap: 10px;
     align-self: start;
+
+    direction: ltr; /* reset */
   }
   .jobRail .btn{
     width: 100%;
-    text-align: center;       /* rail is narrow now */
-    justify-content: center;  /* center content */
+    justify-content: center;
     padding: 10px 8px;
+    text-decoration: none;
   }
-
-  .metaStack{ display:flex; flex-direction: column; gap: 6px; font-size: 13px; }
-  .metaRow{ display:flex; align-items: baseline; gap: 10px; line-height: 1.35; }
-  .metaLabel{ width: 130px; color: var(--muted); flex: 0 0 auto; }
-  .metaVal{ color: var(--text); flex: 1 1 auto; min-width: 0; word-break: break-word; }
 
   /* Modal */
   .modalBack{
@@ -943,6 +1023,10 @@ BASE_HEAD = """
   .toast.err{ border-color: rgba(239,68,68,.55); }
   @keyframes toastIn { to { opacity: 1; transform: translateY(0); } }
   @keyframes toastOut { to { opacity: 0; transform: translateY(10px); } }
+
+  /* Ensure overlays are above landing gradient */
+  .modalBack, .toastHost{ position: fixed; z-index: 9999; }
+  .toastHost{ z-index: 99999; }
 </style>
 
 <script>
@@ -1099,7 +1183,6 @@ BASE_HEAD = """
     const msg = $("rn_msg");
     if (msg){
       const parts = [];
-      if (!enabled) parts.push("This job is currently disabled — running now will still execute it.");
       if (!dryRun) parts.push("Dry Run is OFF — this will perform real actions.");
       parts.push(deleteFiles ? "Delete Files is ON — files may be removed from disk." : "Delete Files is OFF — it should avoid disk deletes.");
       msg.textContent = parts.join(" ");
@@ -1311,7 +1394,9 @@ def shell(page_title: str, active: str, body: str):
       <div class="nav">{nav}</div>
     </div>
 
-    {body}
+    <div class="page">
+      {body}
+    </div>
   </div>
 
   {toasts}
@@ -1943,7 +2028,6 @@ def jobs_page():
             </div>
 
             <div class="jobBody">
-              <!-- meta LEFT -->
               <div class="metaStack">
                 <div class="metaRow">
                   <div class="metaLabel">App:</div>
@@ -1983,7 +2067,6 @@ def jobs_page():
                 </div>
               </div>
 
-              <!-- rail RIGHT -->
               <div class="jobRail">
                 {run_now_button_html(j)}
                 {edit_btn}
@@ -2188,9 +2271,6 @@ def apply_cron():
     return redirect(request.referrer or "/jobs")
 
 
-# --------------------------
-# Preview
-# --------------------------
 @app.get("/preview")
 def preview():
     cfg = load_config()
