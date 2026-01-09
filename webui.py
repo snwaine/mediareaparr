@@ -542,6 +542,10 @@ BASE_HEAD = """
     --shadow: 0 12px 30px rgba(0,0,0,.08);
   }
 
+  html, body{
+    height: 100%;
+  }
+
   body{
     min-height: 100vh;
     margin:0;
@@ -555,7 +559,7 @@ BASE_HEAD = """
     background-attachment: fixed;
     color: var(--text);
 
-    /* Footer always lands at bottom */
+    /* full-height layout */
     display:flex;
     flex-direction: column;
   }
@@ -584,7 +588,8 @@ BASE_HEAD = """
     margin: 0 auto;
     padding: 22px 18px 36px;
     width: 100%;
-    flex: 1 0 auto;
+    flex: 1 0 auto; /* fills remaining height */
+    box-sizing: border-box;
   }
 
   .topbar{
@@ -676,20 +681,16 @@ BASE_HEAD = """
     align-items: center;
     gap: 8px;
   }
-  /* Buttons should never underline on hover */
   a.btn:hover{ text-decoration: none; }
 
-  /* Subtle hover glow for all buttons */
   .btn{
     transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease, filter .18s ease;
   }
-
   .btn:hover{
     border-color: rgba(34,197,94,.55);
     box-shadow: 0 0 0 3px rgba(34,197,94,.10), 0 10px 22px rgba(0,0,0,.22);
     transform: translateY(-1px);
   }
-
   .btn:active{
     transform: translateY(0);
     box-shadow: 0 0 0 2px rgba(34,197,94,.08), 0 6px 14px rgba(0,0,0,.18);
@@ -854,12 +855,11 @@ BASE_HEAD = """
   .enableWrap{ display:flex; align-items:center; gap:10px; }
   .enableLbl{ font-size: 12px; color: var(--muted); white-space: nowrap; }
 
-  /* ✅ Job body 2-col: meta left, action rail right */
   .jobBody{
     padding: 12px 12px;
     background: var(--panel2);
     display: grid;
-    grid-template-columns: 1fr 80px; /* requested */
+    grid-template-columns: 1fr 80px;
     gap: 12px;
     align-items: start;
   }
@@ -883,7 +883,6 @@ BASE_HEAD = """
   .metaLabel{ width: 130px; color: var(--muted); flex: 0 0 auto; }
   .metaVal{ color: var(--text); flex: 1 1 auto; min-width: 0; word-break: break-word; }
 
-  /* Modal */
   .modalBack{
     position: fixed; inset: 0;
     background: rgba(0,0,0,.68);
@@ -951,7 +950,6 @@ BASE_HEAD = """
   [data-theme="light"] th{ color:#111827; background: rgba(0,0,0,.03); }
   .tablewrap{ max-height: 420px; overflow:auto; border-radius: 14px; border: 1px solid var(--line); }
 
-  /* Toasts */
   .toastHost{
     position: fixed;
     right: 16px;
@@ -981,30 +979,6 @@ BASE_HEAD = """
   .toast.err{ border-color: rgba(239,68,68,.55); }
   @keyframes toastIn { to { opacity: 1; transform: translateY(0); } }
   @keyframes toastOut { to { opacity: 0; transform: translateY(10px); } }
-
-  /* Sticky-ish footer bar (lands at bottom, not fixed) */
-  .footerBar{
-    width: 100%;
-    flex: 0 0 auto;
-    padding: 14px 18px 18px;
-    box-sizing: border-box;
-  }
-  .footerInner{
-    max-width: 1200px;
-    margin: 0 auto;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 12px 14px;
-    background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
-    color: var(--muted);
-    font-size: 12px;
-    display:flex;
-    align-items:center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-  .footerInner a{ color: var(--text); }
-  .footerInner a:hover{ text-decoration: underline; }
 </style>
 
 <script>
@@ -1024,7 +998,7 @@ BASE_HEAD = """
   }
 
   // -------------------
-  // Job modal dirty tracking (Option B)
+  // Job modal dirty tracking
   // -------------------
   window.__JOB_MODAL_INITIAL = "";
   window.__JOB_MODAL_DIRTY = false;
@@ -1037,7 +1011,6 @@ BASE_HEAD = """
     for (const [k, v] of fd.entries()){
       entries.push([k, (v ?? "").toString()]);
     }
-    // include unchecked checkboxes explicitly
     const cbs = form.querySelectorAll('input[type="checkbox"][name]');
     for (const cb of cbs){
       if (!fd.has(cb.name)) entries.push([cb.name, ""]);
@@ -1123,7 +1096,6 @@ BASE_HEAD = """
     const appKey = appSel ? (appSel.value || "radarr") : "radarr";
     rebuildTagOptions(appKey, "");
     updateSonarrModeVisibility(appKey);
-    // app change counts as edit
     setTimeout(jobModalUpdateDirty, 0);
   }
 
@@ -1153,8 +1125,6 @@ BASE_HEAD = """
     const t = $("jobTitle");
     if (t) t.textContent = "Add Job";
     showModal("jobBack");
-
-    // mark clean once visible/filled
     setTimeout(jobModalMarkClean, 0);
   }
 
@@ -1187,8 +1157,6 @@ BASE_HEAD = """
     const t = $("jobTitle");
     if (t) t.textContent = "Edit Job";
     showModal("jobBack");
-
-    // mark clean once visible/filled
     setTimeout(jobModalMarkClean, 0);
   }
 
@@ -1312,24 +1280,18 @@ BASE_HEAD = """
 
   document.addEventListener("input", (e) => {
     onSettingsEdited(e);
-    // job modal dirty tracking
     const back = $("jobBack");
     if (back && back.style.display === "flex") {
       const form = $("jobForm");
-      if (form && form.contains(e.target)) {
-        jobModalUpdateDirty();
-      }
+      if (form && form.contains(e.target)) jobModalUpdateDirty();
     }
   });
   document.addEventListener("change", (e) => {
     onSettingsEdited(e);
-    // job modal dirty tracking
     const back = $("jobBack");
     if (back && back.style.display === "flex") {
       const form = $("jobForm");
-      if (form && form.contains(e.target)) {
-        jobModalUpdateDirty();
-      }
+      if (form && form.contains(e.target)) jobModalUpdateDirty();
     }
   });
 
@@ -1427,17 +1389,6 @@ def shell(page_title: str, active: str, body: str):
 
     toasts = render_toasts()
 
-    footer = """
-      <div class="footerBar">
-        <div class="footerInner">
-          <div>mediareaparr • Radarr/Sonarr cleanup scheduler</div>
-          <div class="muted">
-            <a href="/status"><b>Status</b></a> • <a href="/settings"><b>Settings</b></a> • <a href="/jobs"><b>Jobs</b></a>
-          </div>
-        </div>
-      </div>
-    """
-
     return f"""
 <!doctype html>
 <html>
@@ -1461,7 +1412,6 @@ def shell(page_title: str, active: str, body: str):
     {body}
   </div>
 
-  {footer}
   {toasts}
 </body>
 </html>
@@ -1871,7 +1821,7 @@ def jobs_toggle_enabled():
 def jobs_page():
     cfg = load_config()
 
-    # Option A: availability is based on readiness, NOT “has tags”
+    # Availability is readiness-based (not “has tags”)
     radarr_ready = is_app_ready(cfg, "radarr")
     sonarr_ready = is_app_ready(cfg, "sonarr")
 
@@ -2095,7 +2045,6 @@ def jobs_page():
             </div>
 
             <div class="jobBody">
-              <!-- meta LEFT -->
               <div class="metaStack">
                 <div class="metaRow">
                   <div class="metaLabel">App:</div>
@@ -2135,7 +2084,6 @@ def jobs_page():
                 </div>
               </div>
 
-              <!-- rail RIGHT -->
               <div class="jobRail">
                 {run_now_button_html(j)}
                 {edit_btn}
