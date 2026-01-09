@@ -858,7 +858,7 @@ BASE_HEAD = """
 
   .disabledSection{ opacity: .55; filter: grayscale(.12); pointer-events: none; }
 
-  .jobsGrid{ display:grid; grid-template-columns: repeat( auto-fit, minmax(360px, 420px); justify-content: center; gap: 14px; }
+  .jobsGrid{ display:grid; grid-template-columns: repeat( auto-fit, minmax(360px, 420px) ); justify-content: center; gap: 14px; }
   
   .jobCard{
     border: 1px solid var(--line);
