@@ -861,7 +861,7 @@ BASE_HEAD = """
   .jobsGrid{
     display:grid; 
     gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(360px, 420px) );
+    grid-template-columns: repeat(auto-fit, minmax(350px, 460px) );
     justify-content: center;
   }
   
@@ -916,7 +916,7 @@ BASE_HEAD = """
     padding: 12px 12px;
     background: var(--panel2);
     display: grid;
-    grid-template-columns: 1fr 70px;
+    grid-template-columns: 1fr 60px;
     gap: 12px;
     align-items: start;
   }
