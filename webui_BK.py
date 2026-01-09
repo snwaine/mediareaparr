@@ -831,30 +831,39 @@ BASE_HEAD = """
   }
   [data-theme="light"] .toggleRow{ background: #ffffff; }
 
-  .switch{ position: relative; width: 52px; height: 30px; display: inline-block; flex: 0 0 auto; }
+  .switch{ position: relative; width: 42px; height: 20px; display: inline-block; flex: 0 0 auto; }
   .switch input{ opacity: 0; width: 0; height: 0; }
   .slider{
-    position:absolute; cursor:pointer; inset:0;
+    position: absolute;
+    inset: 0;
+    cursor: pointer;
     background: rgba(255,255,255,.10);
     border: 1px solid var(--line2);
     transition: .18s ease;
     border-radius: 999px;
   }
   .slider:before{
-    position:absolute; content:"";
-    height: 22px; width: 22px;
-    left: 4px; top: 50%;
+    position: absolute;
+    content: "";
+    height: 14px;     /* scaled down */
+    width: 14px;
+    left: 3px;
+    top: 50%;
     transform: translateY(-50%);
     background: rgba(255,255,255,.85);
     border-radius: 999px;
     transition: .18s ease;
-    box-shadow: 0 6px 14px rgba(0,0,0,.25);
+    box-shadow: 0 4px 10px rgba(0,0,0,.25);
   }
   .switch input:checked + .slider{
-    background: linear-gradient(135deg, rgba(34,197,94,.60), rgba(22,163,74,.35));
+    background: linear-gradient(
+      135deg,
+      rgba(34,197,94,.60),
+      rgba(22,163,74,.35)
+    );
     border-color: rgba(34,197,94,.55);
   }
-  .switch input:checked + .slider:before{ transform: translate(22px, -50%); background: rgba(255,255,255,.92); }
+  .switch input:checked + .slider:before{ transform: translate(22px, -50%); /* 42 - thumb(14) - padding(6) */ background: rgba(255,255,255,.92);}
 
   .disabledSection{ opacity: .55; filter: grayscale(.12); pointer-events: none; }
 
