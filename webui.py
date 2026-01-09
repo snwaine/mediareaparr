@@ -612,7 +612,7 @@ BASE_HEAD = """
   a:hover{ text-decoration: underline; }
 
   .wrap{
-    max-width: min(1600px, 95vw);
+    max-width: min(1900px, 98vw);
     margin: 0 auto;
     padding: 22px 18px 0px;
     width: 100%;
@@ -870,7 +870,7 @@ BASE_HEAD = """
   .jobsGrid{
     display:grid; 
     gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr) );
+    grid-template-columns: 1fr;
     justify-content: center;
   }
   
@@ -879,19 +879,18 @@ BASE_HEAD = """
     border-radius: 16px;
     background: var(--panel2);
     overflow:hidden;
-    max-width: 520px;
-    grid-column: auto !important;
+    max-width: none;
+    width: 100%;
   }
   
   /* Tablet / small desktop: 2 per row */
-  @media (min-width: 700px){ .jobCard{ grid-column: span 6; } }
+  @media (min-width: 700px){ .jobsGrid{ grid-template-columns: repeat(2, minmax(300px, 1fr));}}
 
   /* Large desktop: 3 per row */
-  @media(min-width: 1200px){ .jobCard{ grid-column: span 4; } }
+   @media (min-width: 1200px){ .jobsGrid{ grid-template-columns: repeat(3, minmax(300px, 1fr)); gap: 16px;}}
   
   /* Ultrawide: 4 per row */
-  @media (min-width: 1800px){ .jobCard{ grid-column: span 3; } }
-  @media (min-width: 1800px){ .jobsGrid{ gap: 20px; } }
+  @media (min-width: 1800px){ .jobsGrid{ grid-template-columns: repeat(4, minmax(300px, 1fr)); gap: 20px;}}
 
   [data-theme="light"] .jobCard{ background: #ffffff; }
 
@@ -1477,7 +1476,6 @@ def shell(page_title: str, active: str, body: str):
 
     <div class="pageBody">
       {body}
-      </div>
     </div>
 
   {toasts}
