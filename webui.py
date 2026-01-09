@@ -577,6 +577,27 @@ BASE_HEAD = """
     background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(0,0,0,.08));
   }
 
+  .pageBody{
+    flex: 1 1 auto;   /* fills space under the topbar */
+    min-height: 0;    /* REQUIRED for nested scrolling */
+    display: flex;
+    flex-direction: column;
+  }
+  
+  /* Page cards should fill available vertical space */
+  .pageBody > .grid{
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+  }
+
+  .pageBody > .grid > .card{
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
   body[data-theme="dark"] { color-scheme: dark; }
   body[data-theme="light"] { color-scheme: light; }
 
@@ -588,8 +609,10 @@ BASE_HEAD = """
     margin: 0 auto;
     padding: 22px 18px 36px;
     width: 100%;
-    flex: 1 0 auto; /* fills remaining height */
     box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
   }
 
   .topbar{
@@ -605,6 +628,7 @@ BASE_HEAD = """
     z-index: 20;
     backdrop-filter: blur(10px);
   }
+
   .brand{ display:flex; align-items:center; gap:12px; }
   .logoWrap{
     width: 38px; height: 38px; border-radius: 12px;
@@ -653,6 +677,7 @@ BASE_HEAD = """
     background: var(--panel);
     box-shadow: var(--shadow);
     overflow:hidden;
+    flex: 0 0 auto;
   }
   .card .hd{
     padding: 14px 16px;
@@ -660,6 +685,9 @@ BASE_HEAD = """
     display:flex; align-items:center; justify-content: space-between;
     gap:12px;
     background: var(--panel2);
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
   }
   [data-theme="light"] .card .hd{ background: #f3f4f6; }
   .card .hd h2{ margin:0; font-size: 14px; letter-spacing:.2px; }
@@ -1409,8 +1437,10 @@ def shell(page_title: str, active: str, body: str):
       <div class="nav">{nav}</div>
     </div>
 
-    {body}
-  </div>
+    <div class="pageBody">
+      {body}
+      </div>
+    </div>
 
   {toasts}
 </body>
