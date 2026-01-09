@@ -890,7 +890,7 @@ BASE_HEAD = """
    @media (min-width: 1200px){ .jobsGrid{ grid-template-columns: repeat(3, minmax(300px, 1fr)); gap: 16px;}}
   
   /* Ultrawide: 4 per row */
-  @media (min-width: 1800px){ .jobsGrid{ grid-template-columns: repeat(4, minmax(300px, 1fr)); gap: 20px;}}
+  @media (min-width: 1600px){ .jobsGrid{ grid-template-columns: repeat(4, minmax(300px, 1fr)); gap: 20px;}}
 
   [data-theme="light"] .jobCard{ background: #ffffff; }
 
