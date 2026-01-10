@@ -557,6 +557,22 @@ BASE_HEAD = """
     --switch-pad: calc(3px * var(--ui));
     --switch-travel: calc(var(--switch-w) - var(--switch-thumb) - (var(--switch-pad) * 2));
 
+    *, *::before, *::after { box-sizing: border-box; }
+    
+    /* Allow grid children to shrink inside columns */
+    .form { grid-template-columns: minmax(0, 1fr); }
+    @media (min-width: 900px){ .form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }}
+    /* Inputs/selects should never overflow their field */
+    .field input[type=text],
+    .field input[type=password],
+    .field input[type=number],
+    .field select,
+    .field textarea{
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    }
+
   }
 
   [data-theme="light"]{
@@ -849,7 +865,7 @@ BASE_HEAD = """
     background: var(--panel2);
   }
   [data-theme="light"] .check{ background: #ffffff; }
-  .check input{ transform: scale(1.2); }
+  .check input{ transform: scale(calc(1.2 * var(--ui))); }
 
   .toggleRow{
     display:flex;
