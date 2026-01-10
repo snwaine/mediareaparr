@@ -1543,7 +1543,7 @@ def shell(page_title: str, active: str, body: str):
     <div class="pageBody">
       {body}
     </div>
-
+  </div>
   {toasts}
 </body>
 </html>
