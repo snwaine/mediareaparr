@@ -295,7 +295,8 @@ def load_config() -> Dict[str, Any]:
             pass
 
     t = (cfg.get("UI_THEME") or "dark").lower()
-    cfg["UI_THEME"] = t if t in ("dark", "light") else "dark"
+    # ✅ third theme option added: "reaparr"
+    cfg["UI_THEME"] = t if t in ("dark", "light", "reaparr") else "dark"
 
     cfg["RADARR_OK"] = bool(cfg.get("RADARR_OK", False))
     cfg["SONARR_OK"] = bool(cfg.get("SONARR_OK", False))
@@ -592,6 +593,26 @@ BASE_HEAD = """
     --shadow: 0 12px 30px rgba(0,0,0,.08);
   }
 
+  /* ✅ Third theme: Reaparr (Radarr-style dark + MediaReaparr green) */
+  [data-theme="reaparr"]{
+    --bg:#070a0d;
+    --panel:#0f1620;
+    --panel2:#121b26;
+
+    --muted:rgba(255,255,255,.64);
+    --text:rgba(255,255,255,.92);
+    --line:rgba(255,255,255,.10);
+    --line2:rgba(255,255,255,.07);
+
+    --accent:#26e08a;
+    --accent2:#16b86e;
+
+    --warn:#ffb020;
+    --bad:#ff5c6c;
+
+    --shadow: 0 12px 28px rgba(0,0,0,.55);
+  }
+
   html, body{
     height: 100%;
   }
@@ -614,6 +635,16 @@ BASE_HEAD = """
     flex-direction: column;
   }
 
+  /* ✅ Reaparr theme background override (Radarr-ish bloom) */
+  body[data-theme="reaparr"]{
+    background:
+      radial-gradient(900px 450px at 20% -10%, rgba(38,224,138,.14), transparent 60%),
+      radial-gradient(800px 420px at 90% 0%, rgba(38,224,138,.10), transparent 55%),
+      radial-gradient(700px 460px at 50% 105%, rgba(38,224,138,.08), transparent 60%),
+      linear-gradient(180deg, #070a0d, #0b0f14 40%, #070a0d);
+    background-attachment: fixed;
+  }
+
   /* Soft bottom “landing” gradient */
   body:after{
     content:"";
@@ -626,6 +657,10 @@ BASE_HEAD = """
   body[data-theme="light"]:after{
     background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(0,0,0,.08));
   }
+  /* ✅ Reaparr landing fade matches deep bg */
+  body[data-theme="reaparr"]:after{
+    background: linear-gradient(to bottom, rgba(7,10,13,0), rgba(7,10,13,.92));
+  }
 
   .pageBody{
     flex: 1 1 auto;
@@ -637,19 +672,19 @@ BASE_HEAD = """
   .pageBody > .grid{
     flex: 1 1 auto;
     min-height: 0;
-    height: 100%;          /* ✅ add this */
+    height: 100%;
     align-content: stretch;
-    align-items: stretch;  /* ✅ add this (important for grid items) */
+    align-items: stretch;
   }
 
   .pageBody > .grid > .card{
-    align-self: stretch;   /* ✅ ensure it stretches in the grid track */
-    height: auto;          /* ✅ remove the 100% dependency */
+    align-self: stretch;
+    height: auto;
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
     overflow: hidden;
-    min-height: 0;         /* ✅ important for bd scrolling */
+    min-height: 0;
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
     box-shadow: 0 12px 28px rgba(0,0,0,.28), inset 0 -1px 0 rgba(255,255,255,.04);
@@ -657,6 +692,7 @@ BASE_HEAD = """
 
   body[data-theme="dark"] { color-scheme: dark; }
   body[data-theme="light"] { color-scheme: light; }
+  body[data-theme="reaparr"] { color-scheme: dark; }
 
   a{ color: var(--text); text-decoration: none; }
   a:hover{ text-decoration: underline; }
@@ -699,6 +735,12 @@ BASE_HEAD = """
     background: linear-gradient(135deg, rgba(34,197,94,.92), rgba(22,163,74,.65));
     box-shadow: 0 10px 24px rgba(34,197,94,.18);
   }
+  /* ✅ Reaparr badge uses your green */
+  body[data-theme="reaparr"] .logoBadge{
+    background: linear-gradient(135deg, rgba(38,224,138,.92), rgba(22,184,110,.65));
+    box-shadow: 0 10px 24px rgba(38,224,138,.18);
+  }
+
   .logoImg{
     width: 100%;
     height: 100%;
@@ -723,6 +765,11 @@ BASE_HEAD = """
   .pill.active{
     border-color: rgba(34,197,94,.55);
     box-shadow: 0 0 0 3px rgba(34,197,94,.16);
+  }
+  /* ✅ Reaparr pill glow uses your green */
+  body[data-theme="reaparr"] .pill.active{
+    border-color: rgba(38,224,138,.55);
+    box-shadow: 0 0 0 3px rgba(38,224,138,.16);
   }
 
   .grid{ display:grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-top: 16px; }
@@ -749,6 +796,20 @@ BASE_HEAD = """
   [data-theme="light"] .card .hd{ background: #f3f4f6; }
   .card .hd h2{ margin:0; font-size: 14px; letter-spacing:.2px; }
   .card .bd{ padding: 14px 16px; background: var(--panel); flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+  /* ✅ Reaparr subtle highlight layers (Radarr-ish surface) */
+  body[data-theme="reaparr"] .card,
+  body[data-theme="reaparr"] .jobCard,
+  body[data-theme="reaparr"] .modal{
+    background: linear-gradient(180deg, rgba(255,255,255,.02), transparent 45%), var(--panel);
+  }
+  body[data-theme="reaparr"] .card .hd,
+  body[data-theme="reaparr"] .jobHeader,
+  body[data-theme="reaparr"] .modal .mh,
+  body[data-theme="reaparr"] .modal .mf,
+  body[data-theme="reaparr"] .topbar{
+    background: linear-gradient(180deg, rgba(255,255,255,.03), transparent), var(--panel2);
+  }
 
   .muted{ color: var(--muted); }
 
@@ -780,9 +841,18 @@ BASE_HEAD = """
     box-shadow: 0 0 0 3px rgba(34,197,94,.10), 0 10px 22px rgba(0,0,0,.22);
     transform: translateY(-1px);
   }
+  /* ✅ Reaparr hover glow uses your green */
+  body[data-theme="reaparr"] .btn:hover{
+    border-color: rgba(38,224,138,.55);
+    box-shadow: 0 0 0 3px rgba(38,224,138,.10), 0 10px 22px rgba(0,0,0,.45);
+  }
+
   .btn:active{
     transform: translateY(0);
     box-shadow: 0 0 0 2px rgba(34,197,94,.08), 0 6px 14px rgba(0,0,0,.18);
+  }
+  body[data-theme="reaparr"] .btn:active{
+    box-shadow: 0 0 0 2px rgba(38,224,138,.08), 0 6px 14px rgba(0,0,0,.40);
   }
 
   .btn:disabled{
@@ -805,6 +875,17 @@ BASE_HEAD = """
   .btn.bad{
     border-color: rgba(239,68,68,.55);
     background: linear-gradient(135deg, rgba(239,68,68,.20), rgba(239,68,68,.08));
+  }
+
+  /* ✅ Reaparr gradients for button variants */
+  body[data-theme="reaparr"] .btn.primary,
+  body[data-theme="reaparr"] .btn.good{
+    border-color: rgba(38,224,138,.45);
+    background: linear-gradient(135deg, rgba(38,224,138,.20), rgba(38,224,138,.08));
+  }
+  body[data-theme="reaparr"] .btn.bad{
+    border-color: rgba(255,92,108,.55);
+    background: linear-gradient(135deg, rgba(255,92,108,.20), rgba(255,92,108,.08));
   }
 
   .form{ display:grid; grid-template-columns: 1fr; gap: 12px; }
@@ -830,6 +911,14 @@ BASE_HEAD = """
     border-radius: 12px;
     outline: none;
   }
+  /* ✅ Reaparr inputs are deeper (less grey box) */
+  body[data-theme="reaparr"] .field input[type=text],
+  body[data-theme="reaparr"] .field input[type=password],
+  body[data-theme="reaparr"] .field input[type=number],
+  body[data-theme="reaparr"] .field select{
+    background: rgba(0,0,0,.22);
+  }
+
   [data-theme="light"] .field input, [data-theme="light"] .field select{ background: #ffffff; }
 
   .field select{
@@ -850,10 +939,16 @@ BASE_HEAD = """
 
   body[data-theme="dark"] .field select option{ background-color: #1f2937; color: #f1f5f9; }
   body[data-theme="light"] .field select option{ background-color: #ffffff; color: #0b1220; }
+  body[data-theme="reaparr"] .field select option{ background-color: #0f1620; color: rgba(255,255,255,.92); }
 
   .field input:focus, .field select:focus{
     border-color: rgba(34,197,94,.55);
     box-shadow: 0 0 0 3px rgba(34,197,94,.14);
+  }
+  body[data-theme="reaparr"] .field input:focus,
+  body[data-theme="reaparr"] .field select:focus{
+    border-color: rgba(38,224,138,.55);
+    box-shadow: 0 0 0 3px rgba(38,224,138,.14);
   }
 
   .checks{ display:flex; flex-direction: column; gap: 10px; margin-top: 4px; }
@@ -913,6 +1008,15 @@ BASE_HEAD = """
     );
     border-color: rgba(34,197,94,.55);
   }
+  /* ✅ Reaparr checked switch uses your green */
+  body[data-theme="reaparr"] .switch input:checked + .slider{
+    background: linear-gradient(
+      135deg,
+      rgba(38,224,138,.60),
+      rgba(22,184,110,.35)
+    );
+    border-color: rgba(38,224,138,.55);
+  }
 
   .switch input:checked + .slider:before{ transform: translate(var(--switch-travel), -50%); background: rgba(255,255,255,.92); }
 
@@ -944,6 +1048,15 @@ BASE_HEAD = """
   @media (min-width: 1800px){ .jobsGrid{ grid-template-columns: repeat(4, minmax(300px, 1fr)); gap: 20px;}}
 
   [data-theme="light"] .jobCard{ background: #ffffff; }
+
+  /* ✅ Reaparr card lift + glow (Radarr-ish) */
+  body[data-theme="reaparr"] .jobCard:hover,
+  body[data-theme="reaparr"] .card:hover{
+    border-color: rgba(38,224,138,.25);
+    box-shadow: 0 0 0 3px rgba(38,224,138,.10), var(--shadow);
+    transform: translateY(-1px);
+    transition: .18s ease;
+  }
 
   .jobHeader{
     padding: 12px 12px;
@@ -1094,6 +1207,8 @@ BASE_HEAD = """
   }
   .toast.ok{ border-color: rgba(34,197,94,.45); }
   .toast.err{ border-color: rgba(239,68,68,.55); }
+  body[data-theme="reaparr"] .toast.ok{ border-color: rgba(38,224,138,.45); }
+  body[data-theme="reaparr"] .toast.err{ border-color: rgba(255,92,108,.55); }
   @keyframes toastIn { to { opacity: 1; transform: translateY(0); } }
   @keyframes toastOut { to { opacity: 0; transform: translateY(10px); } }
 </style>
@@ -1490,17 +1605,19 @@ BASE_HEAD = """
 def shell(page_title: str, active: str, body: str):
     cfg = load_config()
     theme = (cfg.get("UI_THEME") or "dark").lower()
-    if theme not in ("dark", "light"):
+    if theme not in ("dark", "light", "reaparr"):
         theme = "dark"
 
     def pill(name, href, key):
         cls = "pill active" if active == key else "pill"
         return f'<a class="{cls}" href="{href}">{safe_html(name)}</a>'
 
-    theme_label = "Light" if theme == "dark" else "Dark"
+    # ✅ Cycle themes: dark -> light -> reaparr -> dark
+    next_theme = {"dark": "light", "light": "reaparr", "reaparr": "dark"}.get(theme, "dark")
+    next_label = {"dark": "Dark", "light": "Light", "reaparr": "Reaparr"}.get(next_theme, "Dark")
     theme_btn = f"""
       <form method="post" action="/toggle-theme" style="margin:0;">
-        <button class="pill" type="submit">Theme: {safe_html(theme_label)}</button>
+        <button class="pill" type="submit">Theme: {safe_html(next_label)}</button>
       </form>
     """
 
@@ -1571,7 +1688,8 @@ def logo():
 def toggle_theme():
     cfg = load_config()
     cur = (cfg.get("UI_THEME") or "dark").lower()
-    cfg["UI_THEME"] = "light" if cur != "light" else "dark"
+    nxt = {"dark": "light", "light": "reaparr", "reaparr": "dark"}.get(cur, "dark")
+    cfg["UI_THEME"] = nxt
     save_config(cfg)
     flash(f"Theme set to {cfg['UI_THEME']} ✔", "success")
     return redirect(request.referrer or "/dashboard")
@@ -1875,6 +1993,7 @@ def settings():
                       <select name="UI_THEME" data-initial="{safe_html(cfg.get("UI_THEME","dark"))}">
                         <option value="dark" {"selected" if cfg.get("UI_THEME","dark")=="dark" else ""}>Dark</option>
                         <option value="light" {"selected" if cfg.get("UI_THEME","dark")=="light" else ""}>Light</option>
+                        <option value="reaparr" {"selected" if cfg.get("UI_THEME","dark")=="reaparr" else ""}>Reaparr</option>
                       </select>
                     </div>
                   </div>
@@ -1918,7 +2037,7 @@ def save_settings():
     if cfg["UI_SCALE"] > 1.5:
         cfg["UI_SCALE"] = 1.5
     
-    if cfg["UI_THEME"] not in ("dark", "light"):
+    if cfg["UI_THEME"] not in ("dark", "light", "reaparr"):
         cfg["UI_THEME"] = "dark"
 
     if old.get("RADARR_URL") != cfg["RADARR_URL"] or old.get("RADARR_API_KEY") != cfg["RADARR_API_KEY"]:
